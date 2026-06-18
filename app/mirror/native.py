@@ -165,6 +165,13 @@ class NativeMirrorEngine(MirrorEngine):
             cc = self.receiver.session.chromecast  # pychromecast-Instanz
             self._ctrl = CastStreamingControl()
             cc.register_handler(self._ctrl)
+            # Hängenden Mirror-App-Zustand (z. B. aus abgebrochenem Lauf) sauber
+            # zurücksetzen – ohne das antwortet der Receiver oft nicht aufs OFFER.
+            try:
+                cc.quit_app()
+                time.sleep(2)
+            except Exception:  # noqa: BLE001
+                pass
             self._ctrl.launch()
             # Auf die Mirroring-App warten (langsamere Geräte wie das FLX1
             # brauchen länger), max. ~8 s.
