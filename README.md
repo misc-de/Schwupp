@@ -6,7 +6,7 @@
 
 <p align="center">
   Cast your screen, YouTube and media to Chromecast &amp; LG webOS TVs on Linux —
-  native sub-second mirroring, no third-party tools.
+  native sub-second mirroring.
 </p>
 
 <p align="center">
