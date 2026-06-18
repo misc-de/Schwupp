@@ -11,10 +11,12 @@ Zwei Wege:
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
@@ -48,8 +50,16 @@ class ResolvedStream:
     title: str | None
 
 
+def yt_dlp_cmd() -> list[str] | None:
+    """Aufrufpräfix für yt-dlp: bevorzugt das venv-Modul, sonst die System-CLI."""
+    if importlib.util.find_spec("yt_dlp") is not None:
+        return [sys.executable, "-m", "yt_dlp"]
+    exe = shutil.which("yt-dlp")
+    return [exe] if exe else None
+
+
 def yt_dlp_available() -> bool:
-    return shutil.which("yt-dlp") is not None
+    return yt_dlp_cmd() is not None
 
 
 def resolve_stream(page_url: str, max_height: int = 1080) -> ResolvedStream:
@@ -58,7 +68,8 @@ def resolve_stream(page_url: str, max_height: int = 1080) -> ResolvedStream:
     Bevorzugt ein progressives MP4 (Audio+Video in einer Datei) – das spielt der
     Chromecast Default Media Receiver am zuverlässigsten ab.
     """
-    if not yt_dlp_available():
+    cmd = yt_dlp_cmd()
+    if cmd is None:
         raise RuntimeError("yt-dlp ist nicht installiert")
 
     fmt = (
@@ -66,7 +77,7 @@ def resolve_stream(page_url: str, max_height: int = 1080) -> ResolvedStream:
         f"best[vcodec!=none][acodec!=none]/best"
     )
     out = subprocess.run(
-        ["yt-dlp", "-f", fmt, "-j", page_url],
+        [*cmd, "-f", fmt, "-j", page_url],
         capture_output=True,
         text=True,
         timeout=60,

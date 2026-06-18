@@ -64,7 +64,7 @@ OPTIONAL: list[Dep] = [
     Dep("cryptography", "deps.feat.native", _mod("cryptography")),
     Dep("pywebostv", "deps.feat.webos", _mod("pywebostv")),
     Dep("requests", "deps.feat.updater", _mod("requests")),
-    Dep("yt-dlp", "deps.feat.webvideo", _cli("yt-dlp")),
+    Dep("yt-dlp", "deps.feat.webvideo", lambda: _mod("yt_dlp")() or _cli("yt-dlp")()),
 ]
 
 

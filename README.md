@@ -82,8 +82,7 @@ The GUI only talks to the `Receiver` interface; which actions appear is driven b
 
 ```bash
 sudo pacman -S python gtk4 libadwaita gobject-introspection \
-    gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly \
-    gst-libav yt-dlp
+    gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
 ```
 
 **Debian / Ubuntu** (and derivatives):
@@ -91,7 +90,7 @@ sudo pacman -S python gtk4 libadwaita gobject-introspection \
 ```bash
 sudo apt install python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly gstreamer1.0-libav yt-dlp
+    gstreamer1.0-plugins-ugly gstreamer1.0-libav
 ```
 
 **Fedora / CentOS / RHEL** (dnf):
@@ -99,12 +98,14 @@ sudo apt install python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
 ```bash
 sudo dnf install python3 python3-gobject gtk4 libadwaita \
     gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free \
-    gstreamer1-plugins-ugly gstreamer1-libav yt-dlp
+    gstreamer1-plugins-ugly gstreamer1-libav
 ```
 
 > On CentOS/RHEL enable **EPEL** (and **RPM Fusion** for `gstreamer1-plugins-ugly` /
-> `gstreamer1-libav`, which carry patent-encumbered codecs). `yt-dlp` can alternatively
-> be installed via `pip`.
+> `gstreamer1-libav`, which carry patent-encumbered codecs).
+
+The Python dependencies (including `yt-dlp`) are installed into the venv in the next
+step — no extra system package needed.
 
 ### 2. Download Schwupp and set up its Python environment
 

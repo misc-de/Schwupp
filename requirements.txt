@@ -4,5 +4,5 @@ pychromecast>=14.0
 pywebostv>=0.8.9
 cryptography>=42.0   # AES-128-CTR für den nativen Cast-Mirror
 requests>=2.31       # HTTP für den Selbst-Updater (ZIP-Strategie)
-# yt-dlp wird als CLI genutzt (Fallback-YouTube-Extraktion); pychromecast
-# bringt casttube für die native YouTube-App bereits mit.
+yt-dlp>=2024.1       # Web-Video-Extraktion (Fallback); via `python -m yt_dlp`
+# pychromecast bringt casttube für die native YouTube-App bereits mit.
