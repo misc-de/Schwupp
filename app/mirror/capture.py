@@ -69,9 +69,24 @@ class PortalScreenCast:
         self._GLib = GLib
         self._Gio = Gio
         self._callback = callback
+        self._done = False
         self._bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         self._unique = self._bus.get_unique_name().lstrip(":").replace(".", "_")
         self._create_session()
+        # Nicht ewig hängen, falls kein ScreenCast-Portal-Backend antwortet.
+        GLib.timeout_add_seconds(15, self._on_timeout)
+
+    def _on_timeout(self) -> bool:
+        self._finish(None, "ScreenCast-Portal antwortet nicht "
+                           "(xdg-desktop-portal-wlr installiert/aktiv?)")
+        return False
+
+    def _finish(self, fd, info) -> None:  # noqa: ANN001
+        """Ruft den Callback genau einmal (Timeout vs. echtes Ergebnis)."""
+        if self._done:
+            return
+        self._done = True
+        self._callback(fd, info)
 
     # -- Schritt 1: Session erstellen ----------------------------------------
     def _create_session(self) -> None:
@@ -154,7 +169,7 @@ class PortalScreenCast:
             fd = fd_list.get(handle_index)
         except Exception as exc:  # noqa: BLE001
             return self._fail(f"PipeWire-FD-Fehler: {exc}")
-        self._callback(fd, node_id)
+        self._finish(fd, node_id)
 
     # -- D-Bus-Hilfen --------------------------------------------------------
     def _call(self, method: str, params) -> None:  # noqa: ANN001
@@ -182,7 +197,7 @@ class PortalScreenCast:
         )
 
     def _fail(self, msg: str) -> None:
-        self._callback(None, msg)
+        self._finish(None, msg)
 
 
 def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
@@ -191,3 +206,68 @@ def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
         f"pipewiresrc fd={fd} path={node_id} "
         f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
     )
+
+
+def screencast_portal_available() -> bool:
+    """True, wenn das D-Bus-ScreenCast-Portal erreichbar ist (sonst -> Fallback)."""
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync(
+            "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+            "org.freedesktop.DBus.Properties", "Get",
+            GLib.Variant("(ss)", ("org.freedesktop.portal.ScreenCast", "version")),
+            None, Gio.DBusCallFlags.NONE, 2000, None,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def wf_recorder_available() -> bool:
+    """True, wenn wf-recorder als Wayland-Capture-Fallback nutzbar ist."""
+    import shutil
+    return shutil.which("wf-recorder") is not None
+
+
+class WfRecorderCapture:
+    """Wayland-Capture-Fallback ohne Portal: ``wf-recorder`` (wlr-screencopy).
+
+    Startet wf-recorder, das rohe Frames als Matroska nach stdout schreibt; die
+    GStreamer-Quelle liest sie per ``fdsrc``. Für Compositoren wie phoc, wo kein
+    ScreenCast-Portal-Backend (xdg-desktop-portal-wlr) verfügbar ist.
+    """
+
+    def __init__(self, fps: int = 30, output: str | None = None) -> None:
+        self.fps = fps
+        self.output = output
+        self._proc = None
+
+    def source_desc(self) -> str:
+        import subprocess
+        cmd = ["wf-recorder", "--codec", "rawvideo", "--muxer", "matroska",
+               "-f", "/dev/stdout"]
+        if self.output:
+            cmd += ["-o", self.output]
+        self._proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+        )
+        fd = self._proc.stdout.fileno()
+        return (
+            f"fdsrc fd={fd} ! matroskademux ! videoconvert ! videorate "
+            f"! video/x-raw,framerate={self.fps}/1"
+        )
+
+    def stop(self) -> None:
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:  # noqa: BLE001
+                try:
+                    self._proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._proc = None

@@ -16,8 +16,11 @@ from pathlib import Path
 
 from .capture import (
     PortalScreenCast,
+    WfRecorderCapture,
     is_wayland,
     pipewire_source_desc,
+    screencast_portal_available,
+    wf_recorder_available,
     x11_source_desc,
 )
 from .engine import MirrorEngine, gst_element_exists
@@ -32,6 +35,7 @@ class HlsMirrorEngine(MirrorEngine):
         self._pipeline = None
         self._tmpdir: str | None = None
         self._portal: PortalScreenCast | None = None
+        self._wf: WfRecorderCapture | None = None
 
     @staticmethod
     def check_available() -> tuple[bool, str]:
@@ -46,16 +50,29 @@ class HlsMirrorEngine(MirrorEngine):
             return
         self._tmpdir = tempfile.mkdtemp(prefix="schwupp-hls-")
         fps = int(self.cfg("mirror_fps"))
-        if is_wayland():
+        if not is_wayland():
+            self._launch(x11_source_desc(fps=fps))
+        elif screencast_portal_available():
             # Asynchroner Portal-Handshake; Pipeline entsteht im Callback.
             self._portal = PortalScreenCast(fps=fps)
             self._portal.start(self._on_portal_ready)
+        elif wf_recorder_available():
+            self._wf = WfRecorderCapture(fps=fps)
+            self._launch(self._wf.source_desc())
         else:
-            self._launch(x11_source_desc(fps=fps))
+            raise RuntimeError("Kein Wayland-Capture verfügbar "
+                               "(ScreenCast-Portal oder wf-recorder nötig)")
 
     def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
         if fd is None:
-            raise RuntimeError(f"Bildschirmfreigabe nicht möglich: {node_or_err}")
+            # Kein ScreenCast-Portal -> Fallback auf wf-recorder (wlr-screencopy).
+            if wf_recorder_available():
+                print(f"[hls] Portal nicht verfügbar ({node_or_err}); wf-recorder-Fallback")
+                self._wf = WfRecorderCapture(fps=int(self.cfg("mirror_fps")))
+                self._launch(self._wf.source_desc())
+                return
+            print(f"[hls] Bildschirmfreigabe nicht möglich: {node_or_err}")
+            return
         fps = int(self.cfg("mirror_fps"))
         self._launch(pipewire_source_desc(fd, node_or_err, fps=fps))
 
@@ -149,6 +166,9 @@ class HlsMirrorEngine(MirrorEngine):
 
             self._pipeline.set_state(Gst.State.NULL)
             self._pipeline = None
+        if self._wf is not None:
+            self._wf.stop()
+            self._wf = None
         # App am TV beenden (-> zurück zum Home), nicht nur die Wiedergabe stoppen.
         try:
             self.receiver.session.quit_app()

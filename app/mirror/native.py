@@ -26,8 +26,9 @@ import struct
 import threading
 import time
 
-from .capture import (PortalScreenCast, is_wayland, pipewire_source_desc,
-                      x11_source_desc)
+from .capture import (PortalScreenCast, WfRecorderCapture, is_wayland,
+                      pipewire_source_desc, screencast_portal_available,
+                      wf_recorder_available, x11_source_desc)
 from .cast_streaming import rtp
 from .cast_streaming.control import CastStreamingControl, video_stream
 from .cast_streaming.crypto import encrypt_frame
@@ -97,6 +98,7 @@ class NativeMirrorEngine(MirrorEngine):
         self._sock: socket.socket | None = None
         self._dest = None
         self._portal: PortalScreenCast | None = None
+        self._wf: WfRecorderCapture | None = None
         self._source_desc = ""
         self._key = b""
         self._iv = b""
@@ -123,17 +125,31 @@ class NativeMirrorEngine(MirrorEngine):
             raise RuntimeError("Natives Cast-Streaming nur für Cast-Geräte verfügbar")
         self._running = True
         fps = int(self.cfg("mirror_fps"))
-        # Wayland (Phosh/FLX1) braucht den PipeWire-Portal-Handshake; X11 direkt.
-        if is_wayland():
+        if not is_wayland():
+            self._begin(x11_source_desc(fps=fps))
+        elif screencast_portal_available():
+            # Wayland mit ScreenCast-Portal (PipeWire-Handshake, evtl. Dialog).
             self._portal = PortalScreenCast(fps=fps)
             self._portal.start(self._on_portal_ready)
+        elif wf_recorder_available():
+            # Kein Portal (z. B. phoc ohne xdg-desktop-portal-wlr) -> wf-recorder.
+            self._wf = WfRecorderCapture(fps=fps)
+            self._begin(self._wf.source_desc())
         else:
-            self._begin(x11_source_desc(fps=fps))
+            print("[native] Kein Wayland-Capture verfügbar "
+                  "(weder ScreenCast-Portal noch wf-recorder)")
+            self._running = False
 
     def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
         if not self._running:
             return  # bereits wieder gestoppt, während der Portal-Dialog lief
         if fd is None:
+            # Kein ScreenCast-Portal -> Fallback auf wf-recorder (wlr-screencopy).
+            if wf_recorder_available():
+                print(f"[native] Portal nicht verfügbar ({node_or_err}); wf-recorder-Fallback")
+                self._wf = WfRecorderCapture(fps=int(self.cfg("mirror_fps")))
+                self._begin(self._wf.source_desc())
+                return
             print(f"[native] Bildschirmfreigabe nicht möglich: {node_or_err}")
             self._running = False
             return
@@ -300,6 +316,9 @@ class NativeMirrorEngine(MirrorEngine):
         if self._sock is not None:
             self._sock.close()
             self._sock = None
+        if self._wf is not None:
+            self._wf.stop()
+            self._wf = None
         # Mirroring-App am TV beenden (-> zurück zum Home). media_controller.stop()
         # greift hier NICHT, da die Mirror-App läuft, nicht der Media-Receiver.
         try:
