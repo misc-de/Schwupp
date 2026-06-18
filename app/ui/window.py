@@ -17,13 +17,15 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from ..discovery import Discovery, ReceiverInfo  # noqa: E402
+from ..i18n import t  # noqa: E402
 from ..mirror import get_engine_class  # noqa: E402
 from ..receivers import Feature, create_receiver  # noqa: E402
 from ..receivers.base import Context  # noqa: E402
 from ..sources import youtube  # noqa: E402
 from .settings import SettingsDialog  # noqa: E402
 
-_KIND_ICON = {"chromecast": "video-display-symbolic", "webos": "tv-symbolic"}
+_KIND_ICON = {"chromecast": "video-display-symbolic", "webos": "tv-symbolic",
+              "dlna": "tv-symbolic"}
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -58,7 +60,7 @@ class MainWindow(Adw.ApplicationWindow):
         header = Adw.HeaderBar()
         toolbar.add_top_bar(header)
         settings_btn = Gtk.Button(icon_name="emblem-system-symbolic")
-        settings_btn.set_tooltip_text("Einstellungen")
+        settings_btn.set_tooltip_text(t("window.settings"))
         settings_btn.connect("clicked", self._open_settings)
         header.pack_end(settings_btn)
 
@@ -69,12 +71,12 @@ class MainWindow(Adw.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         clamp.set_child(box)
 
-        self._devices_group = Adw.PreferencesGroup(title="Gefundene Geräte")
+        self._devices_group = Adw.PreferencesGroup(title=t("window.devices_found"))
         box.append(self._devices_group)
         self._empty = Adw.StatusPage(
             icon_name="video-display-symbolic",
-            title="Suche nach Geräten…",
-            description="Chromecast oder LG-TV müssen im selben WLAN und eingeschaltet sein.",
+            title=t("window.searching"),
+            description=t("window.searching_hint"),
         )
         self._empty.set_vexpand(True)
         self._devices_group.add(self._empty)
@@ -95,7 +97,7 @@ class MainWindow(Adw.ApplicationWindow):
         if info.uuid in self._rows:
             self._rows[info.uuid].set_title(info.name)
             return False
-        kind_label = "LG webOS" if info.kind == "webos" else "Chromecast"
+        kind_label = t(f"device.{info.kind}")
         row = Adw.ActionRow(title=info.name,
                             subtitle=f"{kind_label} · {info.model or info.host}",
                             activatable=True)
@@ -117,18 +119,18 @@ class MainWindow(Adw.ApplicationWindow):
     # Verbinden
     # ====================================================================
     def _connect(self, info: ReceiverInfo) -> None:
-        self._toast(f"Verbinde mit {info.name}…")
+        self._toast(t("window.connecting", name=info.name))
         receiver = create_receiver(info, self._context)
 
         def prompt_cb() -> None:
-            GLib.idle_add(self._toast, "Bitte am TV mit der Fernbedienung bestätigen")
+            GLib.idle_add(self._toast, t("window.pairing"))
 
         def work() -> None:
             try:
                 receiver.connect(prompt_cb=prompt_cb)
                 GLib.idle_add(self._on_connected, receiver)
             except Exception as exc:  # noqa: BLE001
-                GLib.idle_add(self._toast, f"Verbindung fehlgeschlagen: {exc}")
+                GLib.idle_add(self._toast, t("window.connect_failed", error=exc))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -158,21 +160,21 @@ class MainWindow(Adw.ApplicationWindow):
         clamp.set_child(box)
 
         # -- Quellen ---------------------------------------------------------
-        grp_src = Adw.PreferencesGroup(title="Casten")
+        grp_src = Adw.PreferencesGroup(title=t("window.cast_group"))
         box.append(grp_src)
 
         if receiver.supports(Feature.MEDIA):
-            row_file = Adw.ActionRow(title="Mediendatei…", subtitle="Video/Musik vom Gerät",
-                                     activatable=True)
+            row_file = Adw.ActionRow(title=t("window.media_file"),
+                                     subtitle=t("window.media_file_sub"), activatable=True)
             row_file.add_prefix(Gtk.Image.new_from_icon_name("folder-videos-symbolic"))
             row_file.connect("activated", self._choose_file)
             grp_src.add(row_file)
 
         if any(receiver.supports(f) for f in Feature.ANY_MIRROR):
-            self._mirror_row = Adw.ActionRow(title="Bildschirm spiegeln",
-                                             subtitle="Engine: siehe Einstellungen")
+            self._mirror_row = Adw.ActionRow(title=t("window.mirror"),
+                                             subtitle=t("window.mirror_sub"))
             self._mirror_row.add_prefix(Gtk.Image.new_from_icon_name("video-display-symbolic"))
-            self._mirror_btn = Gtk.Button(label="Start", valign=Gtk.Align.CENTER)
+            self._mirror_btn = Gtk.Button(label=t("window.start"), valign=Gtk.Align.CENTER)
             self._mirror_btn.add_css_class("suggested-action")
             self._mirror_btn.connect("clicked", self._toggle_mirror)
             self._mirror_row.add_suffix(self._mirror_btn)
@@ -182,19 +184,19 @@ class MainWindow(Adw.ApplicationWindow):
 
         # -- Link ------------------------------------------------------------
         if receiver.supports(Feature.MEDIA):
-            grp_link = Adw.PreferencesGroup(title="Link casten")
+            grp_link = Adw.PreferencesGroup(title=t("window.link_group"))
             box.append(grp_link)
-            self._url_row = Adw.EntryRow(title="YouTube- oder Video-URL")
+            self._url_row = Adw.EntryRow(title=t("window.url_placeholder"))
             self._url_row.set_show_apply_button(True)
             self._url_row.connect("apply", self._cast_url)
             grp_link.add(self._url_row)
 
         # -- Wiedergabe ------------------------------------------------------
         if receiver.supports(Feature.PLAYBACK) or receiver.supports(Feature.VOLUME):
-            grp_play = Adw.PreferencesGroup(title="Wiedergabe")
+            grp_play = Adw.PreferencesGroup(title=t("window.playback"))
             box.append(grp_play)
             if receiver.supports(Feature.PLAYBACK):
-                ctl = Adw.ActionRow(title="Steuerung")
+                ctl = Adw.ActionRow(title=t("window.controls"))
                 btns = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
                 for icon, cb in (
                     ("media-playback-start-symbolic", lambda _b: self._safe(self.receiver.play)),
@@ -207,7 +209,7 @@ class MainWindow(Adw.ApplicationWindow):
                 ctl.add_suffix(btns)
                 grp_play.add(ctl)
             if receiver.supports(Feature.VOLUME):
-                vol = Adw.ActionRow(title="Lautstärke")
+                vol = Adw.ActionRow(title=t("window.volume"))
                 scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.05)
                 scale.set_value(0.5)
                 scale.set_size_request(160, -1)
@@ -224,7 +226,7 @@ class MainWindow(Adw.ApplicationWindow):
     # Aktionen
     # ====================================================================
     def _choose_file(self, _row) -> None:  # noqa: ANN001
-        dialog = Gtk.FileDialog(title="Mediendatei wählen")
+        dialog = Gtk.FileDialog(title=t("window.choose_file"))
         dialog.open(self, None, self._on_file_chosen)
 
     def _on_file_chosen(self, dialog, result) -> None:  # noqa: ANN001
@@ -238,9 +240,9 @@ class MainWindow(Adw.ApplicationWindow):
         url = self.app.server.add_file(path)
         mime = mimetypes.guess_type(path)[0] or "video/mp4"
         title = os.path.basename(path)
-        self._toast(f"Sende „{title}“ …")
+        self._toast(t("window.sending", title=title))
         self._async(lambda: self.receiver.play_media(url, mime, title=title),
-                    err="Abspielen fehlgeschlagen")
+                    err=t("window.play_failed"))
 
     def _cast_url(self, row) -> None:  # noqa: ANN001
         url = row.get_text().strip()
@@ -248,8 +250,8 @@ class MainWindow(Adw.ApplicationWindow):
             return
         vid = youtube.parse_video_id(url)
         if vid and self.receiver.supports(Feature.YOUTUBE):
-            self._toast("Starte YouTube…")
-            self._async(lambda: self.receiver.play_youtube(vid), err="YouTube fehlgeschlagen")
+            self._toast(t("window.youtube_starting"))
+            self._async(lambda: self.receiver.play_youtube(vid), err=t("window.youtube_failed"))
             return
 
         def work():
@@ -259,17 +261,17 @@ class MainWindow(Adw.ApplicationWindow):
                 stream = youtube.resolve_stream(url)
                 self.receiver.play_media(stream.url, stream.mime, title=stream.title)
 
-        self._toast("Löse Link auf…")
-        self._async(work, err="Link konnte nicht gecastet werden")
+        self._toast(t("window.resolving_link"))
+        self._async(work, err=t("window.link_failed"))
 
     def _toggle_mirror(self, _btn) -> None:  # noqa: ANN001
         if self.engine is not None and self.engine.running:
             self.engine.stop()
             self.engine = None
-            self._mirror_btn.set_label("Start")
+            self._mirror_btn.set_label(t("window.start"))
             self._mirror_btn.remove_css_class("destructive-action")
             self._mirror_btn.add_css_class("suggested-action")
-            self._toast("Spiegeln beendet")
+            self._toast(t("window.mirror_stopped"))
             return
 
         # Engine nach Gerätetyp: LG webOS -> DLNA-Live-TS, Chromecast -> Einstellung
@@ -280,7 +282,7 @@ class MainWindow(Adw.ApplicationWindow):
         try:
             cls = get_engine_class(name)
         except KeyError:
-            self._toast("Unbekannte Engine – siehe Einstellungen")
+            self._toast(t("window.unknown_engine"))
             return
         ok, detail = cls.check_available()
         if not ok:
@@ -293,10 +295,10 @@ class MainWindow(Adw.ApplicationWindow):
             self.engine = None
             self._toast(str(exc))
             return
-        self._mirror_btn.set_label("Stopp")
+        self._mirror_btn.set_label(t("window.stop"))
         self._mirror_btn.remove_css_class("suggested-action")
         self._mirror_btn.add_css_class("destructive-action")
-        self._toast(f"Spiegeln läuft ({cls.display_name})")
+        self._toast(t("window.mirror_running", engine=cls.display_name))
 
     # ====================================================================
     # Navigation / Aufräumen
@@ -338,7 +340,9 @@ class MainWindow(Adw.ApplicationWindow):
         except Exception as exc:  # noqa: BLE001
             self._toast(str(exc))
 
-    def _async(self, fn, *, err: str = "Fehler") -> None:
+    def _async(self, fn, *, err: str | None = None) -> None:
+        err = err or t("common.error")
+
         def work() -> None:
             try:
                 fn()

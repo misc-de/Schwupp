@@ -10,7 +10,11 @@ zeroconf-Threads – die GUI marshallt per ``GLib.idle_add``.
 """
 from __future__ import annotations
 
+import re
+import socket
 import threading
+import time
+import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 from uuid import UUID
@@ -21,6 +25,60 @@ from pychromecast.discovery import CastBrowser, SimpleCastListener
 from pychromecast.models import CastInfo
 
 AIRPLAY_SERVICE = "_airplay._tcp.local."
+DLNA_RENDERER_ST = "urn:schemas-upnp-org:device:MediaRenderer:1"
+
+# Backend-Vorrang bei gleichem Host: Cast > webOS > DLNA (mehr Funktionen gewinnt)
+_KIND_PRIORITY = {"chromecast": 3, "webos": 2, "dlna": 1}
+
+
+def _tag(xml: str, tag: str) -> str:
+    m = re.search(rf"<{tag}>([^<]+)</{tag}>", xml)
+    return m.group(1).strip() if m else ""
+
+
+def _ssdp_search(st: str, timeout: float = 3.0) -> dict[str, str]:
+    """SSDP M-SEARCH; liefert {host: LOCATION-URL} aller Antwortenden."""
+    msg = "\r\n".join([
+        "M-SEARCH * HTTP/1.1", "HOST:239.255.255.250:1900",
+        'MAN:"ssdp:discover"', "MX:2", f"ST:{st}", "", "",
+    ]).encode()
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.settimeout(timeout)
+    out: dict[str, str] = {}
+    try:
+        s.sendto(msg, ("239.255.255.250", 1900))
+        t = time.time()
+        while time.time() - t < timeout:
+            try:
+                data, addr = s.recvfrom(4096)
+            except socket.timeout:
+                break
+            m = re.search(rb"LOCATION:\s*(\S+)", data, re.I)
+            if m:
+                out.setdefault(addr[0], m.group(1).decode(errors="ignore"))
+    finally:
+        s.close()
+    return out
+
+
+def _fetch_renderer(loc: str) -> tuple[str, str, str] | None:
+    """Lädt die UPnP-Geräte-Beschreibung. Gibt (name, model, avtransport_control_url)
+    zurück oder None, wenn es kein AVTransport-MediaRenderer ist."""
+    try:
+        xml = urllib.request.urlopen(loc, timeout=5).read().decode(errors="ignore")
+    except OSError:
+        return None
+    if "AVTransport:1" not in xml:
+        return None
+    base_m = re.match(r"(https?://[^/]+)", loc)
+    ctrl_m = re.search(
+        r"AVTransport:1</serviceType>.*?<controlURL>([^<]+)</controlURL>", xml, re.S)
+    if not base_m or not ctrl_m:
+        return None
+    base, ctrl = base_m.group(1), ctrl_m.group(1)
+    control = base + (ctrl if ctrl.startswith("/") else "/" + ctrl)
+    return _tag(xml, "friendlyName") or "DLNA-Renderer", _tag(xml, "modelName"), control
 
 
 def _is_cast_receiver(host: str, port: int = 8009, timeout: float = 1.5) -> bool:
@@ -41,13 +99,13 @@ def _is_cast_receiver(host: str, port: int = 8009, timeout: float = 1.5) -> bool
 
 @dataclass(frozen=True)
 class ReceiverInfo:
-    kind: str          # "chromecast" | "webos"
+    kind: str          # "chromecast" | "webos" | "dlna"
     uuid: str
     name: str
     host: str
     port: int
     model: str
-    raw: object = None  # CastInfo (cast) bzw. None (webos)
+    raw: object = None  # CastInfo (cast) | None (webos) | AVTransport-URL (dlna)
 
 
 class Discovery:
@@ -63,6 +121,8 @@ class Discovery:
         self._airplay: zeroconf.ServiceBrowser | None = None
         self._by_host: dict[str, ReceiverInfo] = {}
         self._lock = threading.Lock()
+        self._dlna_stop = threading.Event()
+        self._dlna_thread: threading.Thread | None = None
 
     # -- Dedup über Host (ein TV kann via _googlecast UND _airplay/8009 auftauchen) --
     def _emit_add(self, info: "ReceiverInfo") -> None:
@@ -72,8 +132,13 @@ class Discovery:
             if prev is not None:
                 if prev.uuid == info.uuid:
                     return
-                # echte CastInfo (raw gesetzt) schlägt den reinen 8009-Probe
-                if prev.raw is not None and info.raw is None:
+                pp = _KIND_PRIORITY.get(prev.kind, 0)
+                ip = _KIND_PRIORITY.get(info.kind, 0)
+                # höherwertiges Backend behalten (z. B. Cast/webOS schlägt DLNA)
+                if pp > ip:
+                    return
+                # gleiche Stufe: echte CastInfo (raw) schlägt den reinen 8009-Probe
+                if pp == ip and prev.raw is not None and info.raw is None:
                     return
                 old_uuid = prev.uuid
             self._by_host[info.host] = info
@@ -101,8 +166,11 @@ class Discovery:
         self._airplay = zeroconf.ServiceBrowser(
             self.zconf, AIRPLAY_SERVICE, handlers=[self._airplay_change]
         )
+        self._dlna_thread = threading.Thread(target=self._dlna_loop, daemon=True)
+        self._dlna_thread.start()
 
     def stop(self) -> None:
+        self._dlna_stop.set()
         try:
             if self._cast:
                 self._cast.stop_discovery()
@@ -110,6 +178,31 @@ class Discovery:
                 self._airplay.cancel()
         finally:
             self.zconf.close()
+
+    # -- DLNA / UPnP (SSDP-Polling: Samsung, Sony, Panasonic, Philips, Hisense …) --
+    def _dlna_loop(self) -> None:
+        # DLNA hat kein mDNS-Push -> periodisch per SSDP scannen.
+        while not self._dlna_stop.is_set():
+            try:
+                for host, loc in _ssdp_search(DLNA_RENDERER_ST).items():
+                    if self._dlna_stop.is_set():
+                        break
+                    with self._lock:
+                        prev = self._by_host.get(host)
+                    # Host schon als höherwertiges Backend bekannt? -> Beschreibung sparen
+                    if prev is not None and _KIND_PRIORITY.get(prev.kind, 0) > _KIND_PRIORITY["dlna"]:
+                        continue
+                    found = _fetch_renderer(loc)
+                    if not found:
+                        continue
+                    name, model, control = found
+                    self._emit_add(ReceiverInfo(
+                        kind="dlna", uuid=f"dlna:{host}", name=name,
+                        host=host, port=0, model=model, raw=control,
+                    ))
+            except Exception:  # noqa: BLE001
+                pass
+            self._dlna_stop.wait(25)  # alle 25 s erneut suchen
 
     # -- Chromecast -----------------------------------------------------------
     def _cast_added(self, uuid: UUID, service: str) -> None:

@@ -16,17 +16,36 @@
 </p>
 
 ---
-
+⚠️ **AI-assisted project**  
+---
 **Schwupp** is a self-contained casting app for Linux **desktops** and Linux **phones**
 (Phosh, e.g. FuriPhone FLX1). It streams your screen, YouTube and local media to the TV
 and supports **both Chromecast / Google TV *and* LG webOS** from a single adaptive
 GTK4/libadwaita interface — without depending on external CLI tools like `catt`.
 
-🇩🇪 Eine deutsche Version dieser Anleitung gibt es in [README.de.md](README.de.md).
+The interface follows your system language (English and German included; English is
+the fallback for unsupported locales).
+
+## Quick start
+
+First install the system libraries for your distribution (see
+[Installation](#installation) — `pacman` / `apt` / `dnf`), then:
+
+```bash
+git clone https://github.com/misc-de/Schwupp.git
+cd Schwupp
+python -m venv --system-site-packages .venv
+.venv/bin/pip install -r requirements.txt
+./installation.sh          # registers the app icon + menu entry
+```
+
+Now launch **Schwupp** from your application menu. On start it checks its
+dependencies: if something **required** is missing it tells you and stops; if only
+**optional** parts are missing it lists them and lets you continue anyway.
 
 ## Features per device
 
-| Feature | Chromecast / Google TV | LG webOS |
+| Feature | Chromecast / Google TV | LG webOS (2024+) ¹ |
 |---|---|---|
 | Automatic discovery | ✅ (mDNS `_googlecast`) | ✅ (`_airplay` + port-8009 Cast probe) |
 | Local media files | ✅ HTTP server + Range | ✅ via Cast |
@@ -35,9 +54,19 @@ GTK4/libadwaita interface — without depending on external CLI tools like `catt
 | Play/Pause/Stop, volume | ✅ | ✅ |
 | **Screen mirroring** | ✅ native (**<1 s**) / HLS | ✅ native (**<1 s**) / HLS (~7 s) |
 
-> **LG webOS:** Many LG TVs ship a **hidden Google Cast receiver** (port 8009, *not*
-> announced via mDNS). Schwupp detects it (8009 probe) and drives the LG like a
-> Chromecast — including screen mirroring.
+¹ Newer LG webOS TVs (≈2024+) expose a built-in **hidden Google Cast receiver**
+(port 8009, not announced via mDNS). Schwupp detects it automatically and drives the
+LG like a Chromecast — including screen mirroring. Older LG models without it are
+still usable as DLNA renderers (see below).
+
+### Other TVs via DLNA
+
+**Samsung, Sony, Panasonic, Philips and many Hisense** TVs are discovered
+automatically as **UPnP/DLNA media renderers** (SSDP). They play local media files
+and yt-dlp-resolved web/YouTube videos with play/pause/stop — and volume when the TV
+exposes UPnP RenderingControl. (No screen mirroring — that needs Cast — and no native
+app launch; DLNA has no apps.) If a TV is *also* a Cast or webOS device, the richer
+backend takes precedence automatically.
 
 ## Native low-latency mirroring
 
@@ -77,7 +106,9 @@ The GUI only talks to the `Receiver` interface; which actions appear is driven b
 
 ## Installation
 
-System libraries (Manjaro/Arch):
+Install the system libraries for your distribution.
+
+**Arch / Manjaro:**
 
 ```bash
 sudo pacman -S python gtk4 libadwaita gobject-introspection \
@@ -85,7 +116,27 @@ sudo pacman -S python gtk4 libadwaita gobject-introspection \
     gst-libav yt-dlp
 ```
 
-Project dependencies into a venv (with access to system GTK/GStreamer):
+**Debian / Ubuntu** (and derivatives):
+
+```bash
+sudo apt install python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly gstreamer1.0-libav yt-dlp
+```
+
+**Fedora / CentOS / RHEL** (dnf):
+
+```bash
+sudo dnf install python3 python3-gobject gtk4 libadwaita \
+    gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+    gstreamer1-plugins-ugly gstreamer1-libav yt-dlp
+```
+
+> On CentOS/RHEL enable **EPEL** (and **RPM Fusion** for `gstreamer1-plugins-ugly` /
+> `gstreamer1-libav`, which carry patent-encumbered codecs). `yt-dlp` can alternatively
+> be installed via `pip`.
+
+Then create the project venv (with access to the system GTK/GStreamer):
 
 ```bash
 python -m venv --system-site-packages .venv
@@ -100,17 +151,14 @@ python -m venv --system-site-packages .venv
 ```
 
 Runs in user context (no `sudo`), installs no extra packages, and registers the icon
-as `de.cais.Schwupp` in the hicolor theme. **Schwupp** then appears in your app menu.
+as `de.cais.Schwupp` in the hicolor theme. Afterwards **Schwupp** appears in your app
+menu and launches like any other desktop app.
 
-## Running
+## First use
 
-```bash
-./run.sh
-```
-
-Requirements: the computer and TV are on the same network and the TV is on. The first
-time you connect to an LG TV a pairing dialog appears on the TV — confirm it with the
-remote (the key is stored).
+Open **Schwupp** from your app menu. The computer and TV must be on the same network
+and the TV must be on. The first time you connect to an LG TV, a pairing dialog appears
+on the TV — confirm it with the remote (the key is then stored).
 
 ## Updates
 
