@@ -1,0 +1,6 @@
+# Laufzeit-Abhängigkeiten von Schwupp (ins venv installiert)
+# GTK4 / libadwaita / GStreamer kommen vom System (PyGObject), siehe README.
+pychromecast>=14.0
+pywebostv>=0.8.9
+# yt-dlp wird als CLI genutzt (Fallback-YouTube-Extraktion); pychromecast
+# bringt casttube für die native YouTube-App bereits mit.
