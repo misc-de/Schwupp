@@ -25,7 +25,7 @@ from .engine import MirrorEngine, gst_element_exists
 
 class HlsMirrorEngine(MirrorEngine):
     name = "hls"
-    display_name = "HLS (kompatibel, etwas träge)"
+    display_name = "HLS"
 
     def __init__(self, receiver, server, config) -> None:  # noqa: ANN001
         super().__init__(receiver, server, config)

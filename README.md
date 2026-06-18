@@ -5,8 +5,8 @@
 <h1 align="center">Schwupp</h1>
 
 <p align="center">
-  Cast your screen, YouTube and media to Chromecast &amp; LG webOS TVs on Linux —
-  native sub-second mirroring.
+  Cast your screen, YouTube and media to Chromecast &amp; LG webOS TVs on Linux,
+  with native screen mirroring.
 </p>
 
 <p align="center">
@@ -36,8 +36,8 @@ the fallback for unsupported locales).
 | YouTube | ✅ | ✅ |
 | Web videos | ✅ | ✅ |
 | Play / pause / stop, volume | ✅ | ✅ |
-| Screen mirroring — high latency (> 7 s) | ✅ | ✅ |
-| Screen mirroring — low latency (< 1 s) | ✅ | ✅ |
+| Screen mirroring (native) | ✅ | ✅ |
+| Screen mirroring (HLS) | ✅ | ✅ |
 
 Most TVs are found and connected automatically. Newer LG webOS TVs (≈2024 and later)
 work just like a Chromecast, including screen mirroring.
@@ -50,7 +50,7 @@ mirroring on these needs a Chromecast.)
 
 ## Screen mirroring
 
-Mirror your desktop to the TV with **sub-second latency**. (Curious how it works? See
+Mirror your desktop to the TV. (Curious how it works? See
 [docs/MIRRORING.md](docs/MIRRORING.md).)
 
 ## Architecture

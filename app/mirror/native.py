@@ -86,7 +86,7 @@ def _find_xr_reftime(d: bytes):
 
 class NativeMirrorEngine(MirrorEngine):
     name = "native"
-    display_name = "Nativ (geringe Latenz)"
+    display_name = "Nativ"
 
     def __init__(self, receiver, server, config) -> None:  # noqa: ANN001
         super().__init__(receiver, server, config)
@@ -110,7 +110,7 @@ class NativeMirrorEngine(MirrorEngine):
             import cryptography  # noqa: F401
         except ImportError:
             return False, "Python-Paket 'cryptography' fehlt"
-        return True, "Bereit (Low-Latency, <1 s)"
+        return True, "Bereit"
 
     # -- Start ---------------------------------------------------------------
     def start(self) -> None:
