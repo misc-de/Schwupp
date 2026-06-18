@@ -265,9 +265,12 @@ class MainWindow(Adw.ApplicationWindow):
         self._async(work, err=t("window.link_failed"))
 
     def _toggle_mirror(self, _btn) -> None:  # noqa: ANN001
-        if self.engine is not None and self.engine.running:
-            self.engine.stop()
-            self.engine = None
+        # Läuft (oder hängt nach Startfehler) eine Engine -> stoppen.
+        if self.engine is not None:
+            try:
+                self.engine.stop()
+            finally:
+                self.engine = None
             self._mirror_btn.set_label(t("window.start"))
             self._mirror_btn.remove_css_class("destructive-action")
             self._mirror_btn.add_css_class("suggested-action")

@@ -26,7 +26,8 @@ import struct
 import threading
 import time
 
-from .capture import is_wayland, x11_source_desc
+from .capture import (PortalScreenCast, is_wayland, pipewire_source_desc,
+                      x11_source_desc)
 from .cast_streaming import rtp
 from .cast_streaming.control import CastStreamingControl, video_stream
 from .cast_streaming.crypto import encrypt_frame
@@ -95,6 +96,8 @@ class NativeMirrorEngine(MirrorEngine):
         self._ctrl: CastStreamingControl | None = None
         self._sock: socket.socket | None = None
         self._dest = None
+        self._portal: PortalScreenCast | None = None
+        self._source_desc = ""
         self._key = b""
         self._iv = b""
         self._state = {"fid": 0, "seq": 0, "pk": 0, "oct": 0,
@@ -119,6 +122,25 @@ class NativeMirrorEngine(MirrorEngine):
         if getattr(self.receiver, "kind", None) != "chromecast":
             raise RuntimeError("Natives Cast-Streaming nur für Cast-Geräte verfügbar")
         self._running = True
+        fps = int(self.cfg("mirror_fps"))
+        # Wayland (Phosh/FLX1) braucht den PipeWire-Portal-Handshake; X11 direkt.
+        if is_wayland():
+            self._portal = PortalScreenCast(fps=fps)
+            self._portal.start(self._on_portal_ready)
+        else:
+            self._begin(x11_source_desc(fps=fps))
+
+    def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
+        if not self._running:
+            return  # bereits wieder gestoppt, während der Portal-Dialog lief
+        if fd is None:
+            print(f"[native] Bildschirmfreigabe nicht möglich: {node_or_err}")
+            self._running = False
+            return
+        self._begin(pipewire_source_desc(fd, node_or_err, int(self.cfg("mirror_fps"))))
+
+    def _begin(self, source_desc: str) -> None:
+        self._source_desc = source_desc
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self) -> None:
@@ -214,9 +236,7 @@ class NativeMirrorEngine(MirrorEngine):
             Gst.init(None)
         self._Gst = Gst
 
-        if is_wayland():
-            raise RuntimeError("Wayland-Capture für native Engine noch nicht verdrahtet")
-        src = x11_source_desc(fps=fps)
+        src = self._source_desc  # X11 (ximagesrc) oder Wayland (pipewiresrc)
         desc = (
             f"{src} ! videoscale add-borders=true ! videoconvert "
             f"! video/x-raw,width={width},height={height} "
@@ -280,8 +300,9 @@ class NativeMirrorEngine(MirrorEngine):
         if self._sock is not None:
             self._sock.close()
             self._sock = None
+        # Mirroring-App am TV beenden (-> zurück zum Home). media_controller.stop()
+        # greift hier NICHT, da die Mirror-App läuft, nicht der Media-Receiver.
         try:
-            if self._ctrl is not None:
-                self.receiver.stop()
+            self.receiver.session.quit_app()
         except Exception:  # noqa: BLE001
             pass

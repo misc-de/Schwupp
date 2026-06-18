@@ -149,8 +149,9 @@ class HlsMirrorEngine(MirrorEngine):
 
             self._pipeline.set_state(Gst.State.NULL)
             self._pipeline = None
+        # App am TV beenden (-> zurück zum Home), nicht nur die Wiedergabe stoppen.
         try:
-            self.receiver.stop()
+            self.receiver.session.quit_app()
         except Exception:  # noqa: BLE001
             pass
         if self._tmpdir:
