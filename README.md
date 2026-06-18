@@ -17,6 +17,7 @@
 
 ---
 ⚠️ **AI-assisted project**  
+
 ---
 **Schwupp** is a self-contained casting app for Linux **desktops** and Linux **phones**
 (Phosh, e.g. FuriPhone FLX1). It streams your screen, YouTube and local media to the TV
@@ -26,63 +27,31 @@ GTK4/libadwaita interface — without depending on external CLI tools like `catt
 The interface follows your system language (English and German included; English is
 the fallback for unsupported locales).
 
-## Quick start
-
-First install the system libraries for your distribution (see
-[Installation](#installation) — `pacman` / `apt` / `dnf`), then:
-
-```bash
-git clone https://github.com/misc-de/Schwupp.git
-cd Schwupp
-python -m venv --system-site-packages .venv
-.venv/bin/pip install -r requirements.txt
-./installation.sh          # registers the app icon + menu entry
-```
-
-Now launch **Schwupp** from your application menu. On start it checks its
-dependencies: if something **required** is missing it tells you and stops; if only
-**optional** parts are missing it lists them and lets you continue anyway.
-
 ## Features per device
 
-| Feature | Chromecast / Google TV | LG webOS (2024+) ¹ |
+| Feature | Chromecast / Google TV | LG webOS (2024+) |
 |---|---|---|
-| Automatic discovery | ✅ (mDNS `_googlecast`) | ✅ (`_airplay` + port-8009 Cast probe) |
-| Local media files | ✅ HTTP server + Range | ✅ via Cast |
-| YouTube | ✅ native app | ✅ via Cast |
-| Web videos (yt-dlp) | ✅ | ✅ |
-| Play/Pause/Stop, volume | ✅ | ✅ |
-| **Screen mirroring** | ✅ native (**<1 s**) / HLS | ✅ native (**<1 s**) / HLS (~7 s) |
+| Automatic discovery | ✅ | ✅ |
+| Local media files | ✅ | ✅ |
+| YouTube | ✅ | ✅ |
+| Web videos | ✅ | ✅ |
+| Play / pause / stop, volume | ✅ | ✅ |
+| Screen mirroring (under 1 s) | ✅ | ✅ |
 
-¹ Newer LG webOS TVs (≈2024+) expose a built-in **hidden Google Cast receiver**
-(port 8009, not announced via mDNS). Schwupp detects it automatically and drives the
-LG like a Chromecast — including screen mirroring. Older LG models without it are
-still usable as DLNA renderers (see below).
+Most TVs are found and connected automatically. Newer LG webOS TVs (≈2024 and later)
+work just like a Chromecast, including screen mirroring.
 
-### Other TVs via DLNA
+### Other TVs
 
-**Samsung, Sony, Panasonic, Philips and many Hisense** TVs are discovered
-automatically as **UPnP/DLNA media renderers** (SSDP). They play local media files
-and yt-dlp-resolved web/YouTube videos with play/pause/stop — and volume when the TV
-exposes UPnP RenderingControl. (No screen mirroring — that needs Cast — and no native
-app launch; DLNA has no apps.) If a TV is *also* a Cast or webOS device, the richer
-backend takes precedence automatically.
+**Samsung, Sony, Panasonic, Philips and many Hisense** TVs are also detected and can
+play your media, web videos and YouTube, with playback and volume control. (Screen
+mirroring on these needs a Chromecast.)
 
-## Native low-latency mirroring
+## Screen mirroring
 
-Schwupp includes a **hand-built native Cast-streaming engine** that mirrors the screen
-with **sub-second latency** (confirmed live: the difference between monitor and TV is
-not perceptible). It speaks the real Cast streaming protocol end to end:
-
-- H.264 capture/encode via GStreamer → **AES-128-CTR** encryption → **Cast-RTP**
-  packetization → UDP to the negotiated port (Offer/Answer over the webrtc namespace)
-- **RTCP Sender Reports** with a clock locked to the sent frames *and* corrected for the
-  TV↔PC clock offset (measured live from the receiver's XR packets)
-- **Retransmission** in response to the receiver's Cast-NACK feedback
-
-A robust **HLS engine** (~7 s) is available as a fallback. Full write-up of every
-approach tried (native, HLS, DLNA, browser, AirPlay, Miracast):
-[docs/MIRRORING.md](docs/MIRRORING.md).
+Mirror your desktop to the TV with **sub-second latency** — fast enough to feel direct,
+no extra hardware or browser needed. A slower but extra-robust fallback mode is
+available too. (Curious how it works? See [docs/MIRRORING.md](docs/MIRRORING.md).)
 
 ## Architecture
 
@@ -106,7 +75,7 @@ The GUI only talks to the `Receiver` interface; which actions appear is driven b
 
 ## Installation
 
-Install the system libraries for your distribution.
+### 1. Install the system libraries
 
 **Arch / Manjaro:**
 
@@ -136,23 +105,26 @@ sudo dnf install python3 python3-gobject gtk4 libadwaita \
 > `gstreamer1-libav`, which carry patent-encumbered codecs). `yt-dlp` can alternatively
 > be installed via `pip`.
 
-Then create the project venv (with access to the system GTK/GStreamer):
+### 2. Download Schwupp and set up its Python environment
 
 ```bash
+git clone https://github.com/misc-de/Schwupp.git
+cd Schwupp
 python -m venv --system-site-packages .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## System integration (app icon + menu entry)
+### 3. Add Schwupp to your system (app icon + menu entry)
+
+From inside the cloned `Schwupp` folder:
 
 ```bash
-./installation.sh            # icon (from logo.png) + desktop entry in ~/.local
+./installation.sh            # icon + menu entry in ~/.local (no sudo)
 ./installation.sh --uninstall   # remove again
 ```
 
-Runs in user context (no `sudo`), installs no extra packages, and registers the icon
-as `de.cais.Schwupp` in the hicolor theme. Afterwards **Schwupp** appears in your app
-menu and launches like any other desktop app.
+Afterwards **Schwupp** appears in your app menu and launches like any other desktop
+app — no terminal needed.
 
 ## First use
 
@@ -160,17 +132,14 @@ Open **Schwupp** from your app menu. The computer and TV must be on the same net
 and the TV must be on. The first time you connect to an LG TV, a pairing dialog appears
 on the TV — confirm it with the remote (the key is then stored).
 
+On startup Schwupp checks that everything it needs is installed: if something required
+is missing it tells you and stops; if only optional parts are missing it lists them and
+lets you continue anyway.
+
 ## Updates
 
-**Settings → App → "Check for updates"** compares the local `VERSION` with the one on
-GitHub (`misc-de/Schwupp`) and updates itself:
-
-- **git clone with a remote** → `git fetch` + `git pull`
-- **otherwise** (e.g. ZIP download) → downloads the `main` branch ZIP and overlays it
-  (`.git`, `.venv` are left intact; the config lives in `~/.config/schwupp` and is
-  never overwritten)
-
-After updating, the app offers to restart.
+Go to **Settings → App → "Check for updates"**. Schwupp checks for a newer version and
+updates itself in place — your settings are kept — and then offers to restart.
 
 ## Credits
 
