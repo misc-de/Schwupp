@@ -249,10 +249,11 @@ class WfRecorderCapture:
         import subprocess
         # H.264/Matroska nach stdout; -y umgeht die interaktive Overwrite-Frage.
         # GStreamer demuxt + dekodiert -> Rohbild; die Engine kodiert danach selbst.
-        # -x yuv420p ist nötig: libx264 kommt mit dem RGB-Default nicht klar
-        # (sonst nur Header, keine Frames). -r erzwingt konstante Framerate.
+        # MPEG-TS statt Matroska: streamt live (kein Cluster-Puffern -> kein Ruckeln).
+        # -x yuv420p ist nötig (libx264 kommt mit RGB-Default nicht klar);
+        # -r erzwingt konstante Framerate.
         cmd = ["wf-recorder", "-y", "--codec", "libx264", "-x", "yuv420p",
-               "-r", str(self.fps), "--muxer", "matroska", "-f", "/dev/stdout"]
+               "-r", str(self.fps), "--muxer", "mpegts", "-f", "/dev/stdout"]
         if self.output:
             cmd += ["-o", self.output]
         self._proc = subprocess.Popen(
@@ -263,7 +264,7 @@ class WfRecorderCapture:
         # sonst blockiert die Pipe und das Bild friert ein.
         # pixel-aspect-ratio=1/1: der H.264-Stream kann ein abweichendes SAR tragen.
         return (
-            f"fdsrc fd={fd} do-timestamp=true ! queue ! matroskademux ! h264parse "
+            f"fdsrc fd={fd} do-timestamp=true ! queue ! tsdemux ! h264parse "
             f"! avdec_h264 ! queue leaky=downstream max-size-buffers=2 "
             f"! videoconvert ! videorate "
             f"! video/x-raw,framerate={self.fps}/1,pixel-aspect-ratio=1/1"
