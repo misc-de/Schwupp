@@ -30,7 +30,8 @@ from .capture import (PortalScreenCast, WfRecorderCapture, is_wayland,
                       pipewire_source_desc, screencast_portal_available,
                       wf_recorder_available, x11_source_desc)
 from .cast_streaming import rtp
-from .cast_streaming.control import CastStreamingControl, video_stream
+from .cast_streaming.control import (CastStreamingControl, MIRRORING_APP_ID,
+                                     video_stream)
 from .cast_streaming.crypto import encrypt_frame
 from .engine import MirrorEngine, gst_element_exists
 
@@ -165,7 +166,13 @@ class NativeMirrorEngine(MirrorEngine):
             self._ctrl = CastStreamingControl()
             cc.register_handler(self._ctrl)
             self._ctrl.launch()
-            time.sleep(3)
+            # Auf die Mirroring-App warten (langsamere Geräte wie das FLX1
+            # brauchen länger), max. ~8 s.
+            for _ in range(16):
+                time.sleep(0.5)
+                if getattr(cc.status, "app_id", None) == MIRRORING_APP_ID:
+                    break
+            time.sleep(1)
 
             self._key = os.urandom(16)
             self._iv = os.urandom(16)
@@ -178,10 +185,18 @@ class NativeMirrorEngine(MirrorEngine):
             except (KeyError, TypeError, ValueError):
                 target_delay = TARGET_DELAY_MS
 
-            self._ctrl.send_offer(video_stream(
+            offer = video_stream(
                 0, VIDEO_SSRC, self._key.hex(), self._iv.hex(), width, height, fps, bitrate,
-                target_delay=target_delay))
-            answer = self._ctrl.wait_answer(12)
+                target_delay=target_delay)
+            answer = None
+            for _ in range(3):  # Retry: erstes OFFER wird manchmal verschluckt
+                if not self._running:
+                    return
+                self._ctrl.send_offer(offer)
+                answer = self._ctrl.wait_answer(10)
+                if answer and "udpPort" in answer:
+                    break
+                time.sleep(1.5)
             if not answer or "udpPort" not in answer:
                 raise RuntimeError(f"Cast-Streaming: kein gültiges ANSWER ({answer})")
 

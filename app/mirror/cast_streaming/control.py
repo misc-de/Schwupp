@@ -31,6 +31,8 @@ class CastStreamingControl(BaseController):
 
     def send_offer(self, video: dict, audio: dict | None = None) -> None:
         """Sendet ein OFFER. *video*/*audio* sind die Stream-Definitionen."""
+        self._answer = None
+        self._answer_event.clear()   # frischer Versuch (für Retries)
         self._seq += 1
         streams = [video] + ([audio] if audio else [])
         self.send_message({
