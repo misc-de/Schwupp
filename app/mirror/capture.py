@@ -249,8 +249,10 @@ class WfRecorderCapture:
         import subprocess
         # H.264/Matroska nach stdout; -y umgeht die interaktive Overwrite-Frage.
         # GStreamer demuxt + dekodiert -> Rohbild; die Engine kodiert danach selbst.
-        cmd = ["wf-recorder", "-y", "--codec", "libx264", "--muxer", "matroska",
-               "-f", "/dev/stdout"]
+        # -x yuv420p ist nötig: libx264 kommt mit dem RGB-Default nicht klar
+        # (sonst nur Header, keine Frames). -r erzwingt konstante Framerate.
+        cmd = ["wf-recorder", "-y", "--codec", "libx264", "-x", "yuv420p",
+               "-r", str(self.fps), "--muxer", "matroska", "-f", "/dev/stdout"]
         if self.output:
             cmd += ["-o", self.output]
         self._proc = subprocess.Popen(
