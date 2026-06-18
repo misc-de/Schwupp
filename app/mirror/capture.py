@@ -247,7 +247,9 @@ class WfRecorderCapture:
 
     def source_desc(self) -> str:
         import subprocess
-        cmd = ["wf-recorder", "--codec", "rawvideo", "--muxer", "matroska",
+        # H.264/Matroska nach stdout; -y umgeht die interaktive Overwrite-Frage.
+        # GStreamer demuxt + dekodiert -> Rohbild; die Engine kodiert danach selbst.
+        cmd = ["wf-recorder", "-y", "--codec", "libx264", "--muxer", "matroska",
                "-f", "/dev/stdout"]
         if self.output:
             cmd += ["-o", self.output]
@@ -256,8 +258,8 @@ class WfRecorderCapture:
         )
         fd = self._proc.stdout.fileno()
         return (
-            f"fdsrc fd={fd} ! matroskademux ! videoconvert ! videorate "
-            f"! video/x-raw,framerate={self.fps}/1"
+            f"fdsrc fd={fd} ! matroskademux ! h264parse ! avdec_h264 "
+            f"! videoconvert ! videorate ! video/x-raw,framerate={self.fps}/1"
         )
 
     def stop(self) -> None:
