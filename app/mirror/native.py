@@ -274,10 +274,10 @@ class NativeMirrorEngine(MirrorEngine):
             Gst.init(None)
         self._Gst = Gst
 
-        src = self._source_desc  # X11 (ximagesrc) oder Wayland (pipewiresrc)
+        src = self._source_desc  # X11 (ximagesrc) oder Wayland (pipewiresrc/wf-recorder)
         desc = (
-            f"{src} ! videoscale add-borders=true ! videoconvert "
-            f"! video/x-raw,width={width},height={height} "
+            f"{src} ! videoconvert ! videoscale add-borders=true "
+            f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
             f"! x264enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate // 1000} "
             f"key-int-max={fps} ! video/x-h264,profile=main,stream-format=byte-stream "
             f"! h264parse config-interval=-1 "

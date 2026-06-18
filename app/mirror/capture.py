@@ -259,10 +259,12 @@ class WfRecorderCapture:
             cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
         )
         fd = self._proc.stdout.fileno()
-        # pixel-aspect-ratio=1/1 verhindert Verzerren (der H.264-Stream kann ein
-        # abweichendes SAR tragen, das videoscale sonst streckt).
+        # leaky Queue entkoppelt wf-recorder vom (auf ARM langsameren) Re-Encode,
+        # sonst blockiert die Pipe und das Bild friert ein.
+        # pixel-aspect-ratio=1/1: der H.264-Stream kann ein abweichendes SAR tragen.
         return (
-            f"fdsrc fd={fd} ! matroskademux ! h264parse ! avdec_h264 "
+            f"fdsrc fd={fd} do-timestamp=true ! queue ! matroskademux ! h264parse "
+            f"! avdec_h264 ! queue leaky=downstream max-size-buffers=2 "
             f"! videoconvert ! videorate "
             f"! video/x-raw,framerate={self.fps}/1,pixel-aspect-ratio=1/1"
         )
