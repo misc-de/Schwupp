@@ -45,7 +45,7 @@ class HlsMirrorEngine(MirrorEngine):
         if self._running:
             return
         self._tmpdir = tempfile.mkdtemp(prefix="schwupp-hls-")
-        fps = int(self.config["mirror_fps"])
+        fps = int(self.cfg("mirror_fps"))
         if is_wayland():
             # Asynchroner Portal-Handshake; Pipeline entsteht im Callback.
             self._portal = PortalScreenCast(fps=fps)
@@ -56,7 +56,7 @@ class HlsMirrorEngine(MirrorEngine):
     def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
         if fd is None:
             raise RuntimeError(f"Bildschirmfreigabe nicht möglich: {node_or_err}")
-        fps = int(self.config["mirror_fps"])
+        fps = int(self.cfg("mirror_fps"))
         self._launch(pipewire_source_desc(fd, node_or_err, fps=fps))
 
     def _launch(self, source_desc: str) -> None:
@@ -68,9 +68,9 @@ class HlsMirrorEngine(MirrorEngine):
         if not Gst.is_initialized():
             Gst.init(None)
 
-        bitrate = int(self.config["mirror_bitrate_kbps"])
-        fps = int(self.config["mirror_fps"])
-        height = int(self.config["mirror_height"])
+        bitrate = int(self.cfg("mirror_bitrate_kbps"))
+        fps = int(self.cfg("mirror_fps"))
+        height = int(self.cfg("mirror_height"))
         width = (height * 16 // 9) // 2 * 2   # 16:9-Zielrahmen (gerade Zahl)
         tmp = Path(self._tmpdir)
         base_url = self.server.set_hls_dir(str(tmp))  # liefert ".../hls/"

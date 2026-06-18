@@ -131,12 +131,12 @@ class NativeMirrorEngine(MirrorEngine):
 
             self._key = os.urandom(16)
             self._iv = os.urandom(16)
-            height = int(self.config["mirror_height"])
+            height = int(self.cfg("mirror_height"))
             width = (height * 16 // 9) // 2 * 2
-            fps = int(self.config["mirror_fps"])
-            bitrate = int(self.config["mirror_bitrate_kbps"]) * 1000
+            fps = int(self.cfg("mirror_fps"))
+            bitrate = int(self.cfg("mirror_bitrate_kbps")) * 1000
             try:
-                target_delay = int(self.config["mirror_target_delay_ms"])
+                target_delay = int(self.cfg("mirror_target_delay_ms"))
             except (KeyError, TypeError, ValueError):
                 target_delay = TARGET_DELAY_MS
 

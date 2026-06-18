@@ -27,7 +27,16 @@ _DEFAULTS: dict[str, Any] = {
     "last_update_check": "",
     # Gespeicherte webOS-client_keys je TV-Host: {"192.168.0.33": "<key>"}
     "webos_keys": {},
+    # Gerätespezifische Overrides der DEVICE_KEYS je Geräte-UUID:
+    #   {"cast:…": {"mirror_engine": "hls", "mirror_bitrate_kbps": 4000}}
+    "device_overrides": {},
 }
+
+# Diese Schlüssel sind pro Gerät überschreibbar; sonst gilt der globale Default.
+DEVICE_KEYS = (
+    "mirror_engine", "mirror_bitrate_kbps", "mirror_fps",
+    "mirror_height", "mirror_target_delay_ms",
+)
 
 
 def _config_path() -> Path:
@@ -62,3 +71,12 @@ class Config:
 
     def __setitem__(self, key: str, value: Any) -> None:
         self._data[key] = value
+
+    # -- Gerätespezifische Werte (mit globalem Default als Fallback) ----------
+    def device_value(self, uuid: str, key: str) -> Any:
+        ov = (self._data.get("device_overrides") or {}).get(uuid, {})
+        return ov[key] if key in ov else self[key]
+
+    def set_device_value(self, uuid: str, key: str, value: Any) -> None:
+        devs = self._data.setdefault("device_overrides", {})
+        devs.setdefault(uuid, {})[key] = value

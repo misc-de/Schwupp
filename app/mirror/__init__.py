@@ -6,4 +6,9 @@
 
 Auswahl über die Einstellungen (siehe :mod:`app.config`).
 """
-from .engine import MirrorEngine, available_engines, get_engine_class  # noqa: F401
+from .engine import (  # noqa: F401
+    MirrorEngine,
+    available_engines,
+    engines_for_kind,
+    get_engine_class,
+)

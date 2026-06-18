@@ -50,9 +50,8 @@ mirroring on these needs a Chromecast.)
 
 ## Screen mirroring
 
-Mirror your desktop to the TV with **sub-second latency** — fast enough to feel direct,
-no extra hardware or browser needed. A slower but extra-robust fallback mode is
-available too. (Curious how it works? See [docs/MIRRORING.md](docs/MIRRORING.md).)
+Mirror your desktop to the TV with **sub-second latency**. (Curious how it works? See
+[docs/MIRRORING.md](docs/MIRRORING.md).)
 
 ## Architecture
 

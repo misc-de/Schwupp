@@ -18,7 +18,7 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from ..discovery import Discovery, ReceiverInfo  # noqa: E402
 from ..i18n import t  # noqa: E402
-from ..mirror import get_engine_class  # noqa: E402
+from ..mirror import engines_for_kind, get_engine_class  # noqa: E402
 from ..receivers import Feature, create_receiver  # noqa: E402
 from ..receivers.base import Context  # noqa: E402
 from ..sources import youtube  # noqa: E402
@@ -170,9 +170,9 @@ class MainWindow(Adw.ApplicationWindow):
             row_file.connect("activated", self._choose_file)
             grp_src.add(row_file)
 
-        if any(receiver.supports(f) for f in Feature.ANY_MIRROR):
+        if engines_for_kind(receiver.kind):
             self._mirror_row = Adw.ActionRow(title=t("window.mirror"),
-                                             subtitle=t("window.mirror_sub"))
+                                             subtitle=self._mirror_subtitle(receiver))
             self._mirror_row.add_prefix(Gtk.Image.new_from_icon_name("video-display-symbolic"))
             self._mirror_btn = Gtk.Button(label=t("window.start"), valign=Gtk.Align.CENTER)
             self._mirror_btn.add_css_class("suggested-action")
@@ -274,11 +274,11 @@ class MainWindow(Adw.ApplicationWindow):
             self._toast(t("window.mirror_stopped"))
             return
 
-        # Engine nach Gerätetyp: LG webOS -> DLNA-Live-TS, Chromecast -> Einstellung
-        if self.receiver.kind == "webos":
-            name = "dlnats"
-        else:
-            name = self.app.config["mirror_engine"]
+        # Gerätespezifisch gewählte Engine (Default = erste passende für den Typ)
+        name = self._chosen_engine_name(self.receiver)
+        if name is None:
+            self._toast(t("window.unknown_engine"))
+            return
         try:
             cls = get_engine_class(name)
         except KeyError:
@@ -325,8 +325,28 @@ class MainWindow(Adw.ApplicationWindow):
     # ====================================================================
     # Hilfen
     # ====================================================================
+    # -- Engine-Auswahl / Spiegel-Beschreibung -------------------------------
+    def _chosen_engine_name(self, receiver) -> str | None:  # noqa: ANN001
+        engines = engines_for_kind(receiver.kind)
+        if not engines:
+            return None
+        names = [e.name for e in engines]
+        chosen = self.app.config.device_value(receiver.info.uuid, "mirror_engine")
+        return chosen if chosen in names else names[0]
+
+    def _mirror_subtitle(self, receiver) -> str:  # noqa: ANN001
+        name = self._chosen_engine_name(receiver)
+        return t(f"mirror.desc.{name}") if name else t("window.mirror_sub")
+
+    def _refresh_mirror_subtitle(self) -> None:
+        if self.receiver is not None and getattr(self, "_mirror_row", None) is not None:
+            self._mirror_row.set_subtitle(self._mirror_subtitle(self.receiver))
+
     def _open_settings(self, _btn) -> None:  # noqa: ANN001
-        SettingsDialog(self.app.config).present(self)
+        dialog = SettingsDialog(self.app.config, receiver=self.receiver)
+        if self.receiver is not None:
+            dialog.connect("closed", lambda *_: self._refresh_mirror_subtitle())
+        dialog.present(self)
 
     def _toast(self, text: str) -> bool:
         self._toasts.add_toast(Adw.Toast(title=text, timeout=3))

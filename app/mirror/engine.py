@@ -32,6 +32,14 @@ class MirrorEngine(ABC):
         self.config = config
         self._running = False
 
+    def cfg(self, key: str):
+        """Gerätespezifischer Config-Wert (mit globalem Default als Fallback)."""
+        info = getattr(self.receiver, "info", None)
+        uuid = getattr(info, "uuid", None)
+        if uuid and hasattr(self.config, "device_value"):
+            return self.config.device_value(uuid, key)
+        return self.config[key]
+
     @abstractmethod
     def start(self) -> None:
         """Startet Capture + Übertragung. Wirft bei Fehler eine Exception."""
@@ -101,6 +109,27 @@ def available_engines() -> list[EngineInfo]:
     """Listet alle Engines mit Verfügbarkeits-Status (für die Einstellungen)."""
     infos: list[EngineInfo] = []
     for name, cls in _registry().items():
+        ok, detail = cls.check_available()
+        infos.append(EngineInfo(name, cls.display_name, ok, detail))
+    return infos
+
+
+# Welche Spiegel-Engines pro Gerätetyp sinnvoll sind. Reihenfolge = Vorzug.
+# webOS-only und reine DLNA-TVs bieten von Linux aus kein zuverlässiges
+# Live-Mirroring (siehe receivers/webos.py, docs/MIRRORING.md) -> leer.
+_KIND_ENGINES: dict[str, tuple[str, ...]] = {
+    "chromecast": ("native", "hls"),
+    "webos": (),
+    "dlna": (),
+}
+
+
+def engines_for_kind(kind: str) -> list[EngineInfo]:
+    """Engines, die für ein Gerät dieses Typs in Frage kommen (mit Status)."""
+    reg = _registry()
+    infos: list[EngineInfo] = []
+    for name in _KIND_ENGINES.get(kind, ()):
+        cls = reg[name]
         ok, detail = cls.check_available()
         infos.append(EngineInfo(name, cls.display_name, ok, detail))
     return infos

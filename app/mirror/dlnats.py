@@ -38,7 +38,7 @@ class DlnaTsMirrorEngine(MirrorEngine):
     def start(self) -> None:
         if self._running:
             return
-        fps = int(self.config["mirror_fps"])
+        fps = int(self.cfg("mirror_fps"))
         if is_wayland():
             self._portal = PortalScreenCast(fps=fps)
             self._portal.start(self._on_portal_ready)
@@ -48,7 +48,7 @@ class DlnaTsMirrorEngine(MirrorEngine):
     def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
         if fd is None:
             raise RuntimeError(f"Bildschirmfreigabe nicht möglich: {node_or_err}")
-        self._launch(pipewire_source_desc(fd, node_or_err, int(self.config["mirror_fps"])))
+        self._launch(pipewire_source_desc(fd, node_or_err, int(self.cfg("mirror_fps"))))
 
     def _launch(self, source_desc: str) -> None:
         import gi
@@ -60,8 +60,8 @@ class DlnaTsMirrorEngine(MirrorEngine):
             Gst.init(None)
         self._Gst = Gst
 
-        bitrate = int(self.config["mirror_bitrate_kbps"])
-        fps = int(self.config["mirror_fps"])
+        bitrate = int(self.cfg("mirror_bitrate_kbps"))
+        fps = int(self.cfg("mirror_fps"))
         self._live_url, self._live = self.server.add_live("video/mp2t")
 
         desc = (
