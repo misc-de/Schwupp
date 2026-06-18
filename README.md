@@ -1,50 +1,83 @@
-# Schwupp
+<p align="center">
+  <img src="logo.png" alt="Schwupp" width="128">
+</p>
 
-Eigenständige Linux-App zum **Casten auf den Fernseher** – für **Chromecast/
-Google-TV** *und* **LG webOS** (Multi-Backend), auf Desktop und Linux-Phone
-(Phosh, z. B. FuriPhone FLX1). Python + GTK4/libadwaita, ohne Abhängigkeit von
-fremden Kommandozeilen-Tools wie `catt`.
+<h1 align="center">Schwupp</h1>
 
-## Funktionen pro Gerät
+<p align="center">
+  Cast your screen, YouTube and media to Chromecast &amp; LG webOS TVs on Linux —
+  native sub-second mirroring, no third-party tools.
+</p>
 
-| Funktion | Chromecast / Google-TV | LG webOS |
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/GTK4-libadwaita-green.svg" alt="GTK4 / libadwaita">
+</p>
+
+---
+
+**Schwupp** is a self-contained casting app for Linux **desktops** and Linux **phones**
+(Phosh, e.g. FuriPhone FLX1). It streams your screen, YouTube and local media to the TV
+and supports **both Chromecast / Google TV *and* LG webOS** from a single adaptive
+GTK4/libadwaita interface — without depending on external CLI tools like `catt`.
+
+🇩🇪 Eine deutsche Version dieser Anleitung gibt es in [README.de.md](README.de.md).
+
+## Features per device
+
+| Feature | Chromecast / Google TV | LG webOS |
 |---|---|---|
-| Gerät automatisch finden | ✅ (mDNS `_googlecast`) | ✅ (`_airplay` + 8009-Cast-Probe) |
-| Lokale Mediendateien | ✅ HTTP-Server + Range | ✅ via Cast |
-| YouTube | ✅ native App | ✅ via Cast |
-| Web-Videos (yt-dlp) | ✅ | ✅ |
-| Play/Pause/Stopp, Lautstärke | ✅ | ✅ |
-| **Bildschirm spiegeln** | ✅ HLS-Engine | ✅ HLS-Engine (~7 s Latenz) |
+| Automatic discovery | ✅ (mDNS `_googlecast`) | ✅ (`_airplay` + port-8009 Cast probe) |
+| Local media files | ✅ HTTP server + Range | ✅ via Cast |
+| YouTube | ✅ native app | ✅ via Cast |
+| Web videos (yt-dlp) | ✅ | ✅ |
+| Play/Pause/Stop, volume | ✅ | ✅ |
+| **Screen mirroring** | ✅ native (**<1 s**) / HLS | ✅ native (**<1 s**) / HLS (~7 s) |
 
-> **LG webOS:** Viele LG-TVs haben einen **versteckten Google-Cast-Receiver**
-> (Port 8009, ohne mDNS-Ankündigung). Schwupp erkennt das (8009-Probe) und nutzt
-> den LG wie einen Chromecast — inkl. **Bildschirmspiegelung via HLS** (~7 s Latenz).
-> Für echtes Low-Latency-Mirroring (<1 s) ist der native Cast-Streaming-Sender als
-> Ausbaustufe geplant (Offer/Answer bereits bestätigt). Details und alle erprobten
-> Wege (DLNA/Browser/AirPlay/Miracast): [docs/MIRRORING.md](docs/MIRRORING.md).
+> **LG webOS:** Many LG TVs ship a **hidden Google Cast receiver** (port 8009, *not*
+> announced via mDNS). Schwupp detects it (8009 probe) and drives the LG like a
+> Chromecast — including screen mirroring.
 
-## Architektur
+## Native low-latency mirroring
+
+Schwupp includes a **hand-built native Cast-streaming engine** that mirrors the screen
+with **sub-second latency** (confirmed live: the difference between monitor and TV is
+not perceptible). It speaks the real Cast streaming protocol end to end:
+
+- H.264 capture/encode via GStreamer → **AES-128-CTR** encryption → **Cast-RTP**
+  packetization → UDP to the negotiated port (Offer/Answer over the webrtc namespace)
+- **RTCP Sender Reports** with a clock locked to the sent frames *and* corrected for the
+  TV↔PC clock offset (measured live from the receiver's XR packets)
+- **Retransmission** in response to the receiver's Cast-NACK feedback
+
+A robust **HLS engine** (~7 s) is available as a fallback. Full write-up of every
+approach tried (native, HLS, DLNA, browser, AirPlay, Miracast):
+[docs/MIRRORING.md](docs/MIRRORING.md).
+
+## Architecture
 
 ```
 app/
-  discovery.py     vereinheitlichte Discovery (Chromecast + LG via zeroconf)
-  receivers/       Geräte-Backends hinter einer Schnittstelle:
-    base.py          Receiver-Interface + Feature-Gating
+  discovery.py     unified discovery (Chromecast + LG via zeroconf)
+  receivers/       device backends behind one interface:
+    base.py          Receiver interface + feature gating
     chromecast.py    pychromecast
-    webos.py         pywebostv (Steuerung/YouTube) + DLNA (Medien)
-  dlna.py          minimaler UPnP-AVTransport-Client (für webOS-Medien)
-  server/          lokaler HTTP-Server (Dateien mit Range, HLS, Live-Stream)
-  sources/         YouTube / Web-Video (yt-dlp)
-  mirror/          austauschbare Mirror-Engines (hls, dlnats, native, openscreen)
-  ui/              GTK4/libadwaita-Oberfläche (adaptiv Desktop/Phone)
+    webos.py         pywebostv (control/YouTube) + DLNA (media)
+  dlna.py          minimal UPnP-AVTransport client (webOS media)
+  server/          local HTTP server (files w/ Range, HLS, live stream)
+  sources/         YouTube / web video (yt-dlp)
+  mirror/          pluggable mirror engines (native, hls, dlnats, openscreen)
+  updater.py       self-update (git pull or GitHub ZIP)
+  ui/              GTK4/libadwaita interface (adaptive desktop/phone)
 ```
 
-Die GUI spricht nur das `Receiver`-Interface; welche Aktionen erscheinen, richtet
-sich nach `receiver.supports(...)`.
+The GUI only talks to the `Receiver` interface; which actions appear is driven by
+`receiver.supports(...)`.
 
 ## Installation
 
-System-Bibliotheken (Manjaro/Arch):
+System libraries (Manjaro/Arch):
 
 ```bash
 sudo pacman -S python gtk4 libadwaita gobject-introspection \
@@ -52,54 +85,67 @@ sudo pacman -S python gtk4 libadwaita gobject-introspection \
     gst-libav yt-dlp
 ```
 
-Projekt-Abhängigkeiten ins venv (mit Zugriff auf System-GTK/GStreamer):
+Project dependencies into a venv (with access to system GTK/GStreamer):
 
 ```bash
 python -m venv --system-site-packages .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-## Ins System einbinden (App-Icon + Menü-Eintrag)
+## System integration (app icon + menu entry)
 
 ```bash
-./installation.sh            # Icon (aus logo.png) + Desktop-Eintrag in ~/.local
-./installation.sh --uninstall   # wieder entfernen
+./installation.sh            # icon (from logo.png) + desktop entry in ~/.local
+./installation.sh --uninstall   # remove again
 ```
 
-Läuft im Benutzerkontext (kein `sudo`), installiert keine zusätzlichen Pakete und
-legt das Icon als `de.cais.Schwupp` im hicolor-Theme ab; danach erscheint **Schwupp**
-im App-Menü und das Fenster nutzt das Logo.
+Runs in user context (no `sudo`), installs no extra packages, and registers the icon
+as `de.cais.Schwupp` in the hicolor theme. **Schwupp** then appears in your app menu.
 
-## Starten
+## Running
 
 ```bash
 ./run.sh
 ```
 
-Voraussetzung: Gerät und Fernseher im selben Netz; der TV ist eingeschaltet.
-Beim ersten Verbinden mit einem LG-TV erscheint dort ein Pairing-Dialog – mit der
-Fernbedienung bestätigen (der Schlüssel wird gespeichert).
+Requirements: the computer and TV are on the same network and the TV is on. The first
+time you connect to an LG TV a pairing dialog appears on the TV — confirm it with the
+remote (the key is stored).
 
 ## Updates
 
-In **Einstellungen → App** gibt es „Nach Updates suchen". Die App vergleicht die
-lokale `VERSION` mit der auf GitHub (`misc-de/Schwupp`) und aktualisiert sich selbst:
+**Settings → App → "Check for updates"** compares the local `VERSION` with the one on
+GitHub (`misc-de/Schwupp`) and updates itself:
 
-- **git-Klon mit Remote** → `git fetch` + `git pull`.
-- **sonst** (z. B. ZIP-Download) → lädt das ZIP des `main`-Branches und legt es über
-  das Verzeichnis (`.git`, `.venv` u. a. bleiben unangetastet; die Config liegt
-  ohnehin in `~/.config/schwupp` und wird nie überschrieben).
+- **git clone with a remote** → `git fetch` + `git pull`
+- **otherwise** (e.g. ZIP download) → downloads the `main` branch ZIP and overlays it
+  (`.git`, `.venv` are left intact; the config lives in `~/.config/schwupp` and is
+  never overwritten)
 
-Nach dem Update bietet die App einen Neustart an.
+After updating, the app offers to restart.
 
-**Release veröffentlichen** (für den Maintainer): `VERSION` erhöhen, committen und
-nach `misc-de/Schwupp` (Branch `main`) pushen – Clients sehen die neue Version dann
-beim nächsten Update-Check.
+## Credits
 
-## Status
+Schwupp stands on the shoulders of these projects:
 
-Funktionsfähig und live getestet (LG OLED55G29LA): Discovery, Pairing, YouTube,
-lokale Medien, Steuerung. Chromecast-Pfad inkl. HLS-Bildschirmspiegelung
-implementiert (testbar mit einem Cast-Gerät). Offene Ausbaustufen: native
-Cast-Streaming-Engine (Low-Latency-Mirror auf Chromecast), Verfeinerung der
-webOS-Lautstärke.
+| Project | Used for | License |
+|---|---|---|
+| [pychromecast](https://github.com/home-assistant-libs/pychromecast) | Google Cast protocol (incl. bundled `casttube` for YouTube) | LGPL-2.1 |
+| [pywebostv](https://github.com/supersaiyanmode/PyWebOSTV) | LG webOS SSAP control | MIT |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | web video extraction (fallback) | Unlicense |
+| [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | mDNS service discovery | LGPL-2.1 |
+| [cryptography](https://github.com/pyca/cryptography) | AES-128-CTR for the native mirror | Apache-2.0 / BSD |
+| [requests](https://github.com/psf/requests) | HTTP for the updater | Apache-2.0 |
+| [PyGObject](https://pygobject.gnome.org/) · [GTK4](https://gtk.org/) · [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) | the user interface | LGPL |
+| [GStreamer](https://gstreamer.freedesktop.org/) | screen capture & H.264 encoding | LGPL |
+
+The native Cast-streaming wire format was derived from the public
+[Chromium Open Screen Library](https://chromium.googlesource.com/openscreen/) /
+`media/cast` sources (no code copied). The self-update flow is modeled on the author's
+[DrivePulse](https://github.com/misc-de/DrivePulse) app.
+
+These dependencies keep their own licenses; the table above is informational.
+
+## License
+
+Released under the [MIT License](LICENSE) © 2026 misc-de.
