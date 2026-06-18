@@ -259,9 +259,12 @@ class WfRecorderCapture:
             cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
         )
         fd = self._proc.stdout.fileno()
+        # pixel-aspect-ratio=1/1 verhindert Verzerren (der H.264-Stream kann ein
+        # abweichendes SAR tragen, das videoscale sonst streckt).
         return (
             f"fdsrc fd={fd} ! matroskademux ! h264parse ! avdec_h264 "
-            f"! videoconvert ! videorate ! video/x-raw,framerate={self.fps}/1"
+            f"! videoconvert ! videorate "
+            f"! video/x-raw,framerate={self.fps}/1,pixel-aspect-ratio=1/1"
         )
 
     def stop(self) -> None:
