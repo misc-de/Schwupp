@@ -36,7 +36,8 @@ the fallback for unsupported locales).
 | YouTube | ✅ | ✅ |
 | Web videos | ✅ | ✅ |
 | Play / pause / stop, volume | ✅ | ✅ |
-| Screen mirroring (under 1 s) | ✅ | ✅ |
+| Screen mirroring — high latency (> 7 s) | ✅ | ✅ |
+| Screen mirroring — low latency (< 1 s) | ✅ | ✅ |
 
 Most TVs are found and connected automatically. Newer LG webOS TVs (≈2024 and later)
 work just like a Chromecast, including screen mirroring.
