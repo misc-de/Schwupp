@@ -252,8 +252,12 @@ class WfRecorderCapture:
         # MPEG-TS statt Matroska: streamt live (kein Cluster-Puffern -> kein Ruckeln).
         # -x yuv420p ist nötig (libx264 kommt mit RGB-Default nicht klar);
         # -r erzwingt konstante Framerate.
+        # preset=ultrafast + tune=zerolatency: ohne preset nimmt libx264 "medium",
+        # das auf dem ARM-Phone bei voller Display-Auflösung nur wenige fps schafft
+        # (Hauptursache der Trägheit). Dieser wf-Encode wird ohnehin neu kodiert.
         cmd = ["wf-recorder", "-y", "--codec", "libx264", "-x", "yuv420p",
-               "-r", str(self.fps), "--muxer", "mpegts", "-f", "/dev/stdout"]
+               "-r", str(self.fps), "-p", "preset=ultrafast", "-p", "tune=zerolatency",
+               "--muxer", "mpegts", "-f", "/dev/stdout"]
         if self.output:
             cmd += ["-o", self.output]
         self._proc = subprocess.Popen(

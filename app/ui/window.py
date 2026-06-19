@@ -334,7 +334,7 @@ class MainWindow(Adw.ApplicationWindow):
         if not engines:
             return None
         names = [e.name for e in engines]
-        chosen = self.app.config.device_value(receiver.info.uuid, "mirror_engine")
+        chosen = self.app.config.device_value_for(receiver.info, "mirror_engine")
         return chosen if chosen in names else names[0]
 
     def _mirror_subtitle(self, receiver) -> str:  # noqa: ANN001

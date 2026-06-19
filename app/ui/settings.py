@@ -31,7 +31,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         self.set_title(t("settings.title"))
         self._config = config
         self._receiver = receiver
-        self._uuid = receiver.info.uuid if receiver is not None else None
+        self._info = receiver.info if receiver is not None else None
 
         page = Adw.PreferencesPage(title=t("settings.general"), icon_name="emblem-system-symbolic")
         self.add(page)
@@ -47,7 +47,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         engines = engines_for_kind(receiver.kind)
         if not engines:
             return  # Gerät kann nicht spiegeln -> keine Sektion
-        uuid = receiver.info.uuid
+        info = receiver.info
 
         grp = Adw.PreferencesGroup(title=t("settings.mirror_group"), description=receiver.name)
         page.add(grp)
@@ -56,7 +56,7 @@ class SettingsDialog(Adw.PreferencesDialog):
         names = [e.display_name + ("" if e.available else t("settings.unavailable_suffix"))
                  for e in engines]
         self._engine_row = Adw.ComboRow(title=t("settings.engine"), model=Gtk.StringList.new(names))
-        current = self._config.device_value(uuid, "mirror_engine")
+        current = self._config.device_value_for(info, "mirror_engine")
         for i, e in enumerate(engines):
             if e.name == current:
                 self._engine_row.set_selected(i)
@@ -70,39 +70,39 @@ class SettingsDialog(Adw.PreferencesDialog):
         res_labels = [f"{h}p" + (" (4K)" if h == 2160 else "") for h in _RESOLUTIONS]
         self._res_row = Adw.ComboRow(title=t("settings.resolution"),
                                      model=Gtk.StringList.new(res_labels))
-        cur_h = int(self._config.device_value(uuid, "mirror_height"))
+        cur_h = int(self._config.device_value_for(info, "mirror_height"))
         self._res_row.set_selected(_RESOLUTIONS.index(cur_h) if cur_h in _RESOLUTIONS else 1)
         self._res_row.connect("notify::selected", self._on_res_changed)
         grp_video.add(self._res_row)
 
         self._bitrate = Adw.SpinRow.new_with_range(1000, 20000, 500)
         self._bitrate.set_title(t("settings.bitrate"))
-        self._bitrate.set_value(int(self._config.device_value(uuid, "mirror_bitrate_kbps")))
+        self._bitrate.set_value(int(self._config.device_value_for(info, "mirror_bitrate_kbps")))
         self._bitrate.connect("notify::value", self._on_bitrate)
         grp_video.add(self._bitrate)
 
         self._fps = Adw.SpinRow.new_with_range(10, 60, 5)
         self._fps.set_title(t("settings.fps"))
-        self._fps.set_value(int(self._config.device_value(uuid, "mirror_fps")))
+        self._fps.set_value(int(self._config.device_value_for(info, "mirror_fps")))
         self._fps.connect("notify::value", self._on_fps)
         grp_video.add(self._fps)
 
     def _on_engine_changed(self, row, _p) -> None:  # noqa: ANN001
-        self._config.set_device_value(self._uuid, "mirror_engine",
-                                      self._engines[row.get_selected()].name)
+        self._config.set_device_value_for(self._info, "mirror_engine",
+                                          self._engines[row.get_selected()].name)
         self._config.save()
 
     def _on_res_changed(self, row, _p) -> None:  # noqa: ANN001
-        self._config.set_device_value(self._uuid, "mirror_height",
-                                      _RESOLUTIONS[row.get_selected()])
+        self._config.set_device_value_for(self._info, "mirror_height",
+                                          _RESOLUTIONS[row.get_selected()])
         self._config.save()
 
     def _on_bitrate(self, row, _p) -> None:  # noqa: ANN001
-        self._config.set_device_value(self._uuid, "mirror_bitrate_kbps", int(row.get_value()))
+        self._config.set_device_value_for(self._info, "mirror_bitrate_kbps", int(row.get_value()))
         self._config.save()
 
     def _on_fps(self, row, _p) -> None:  # noqa: ANN001
-        self._config.set_device_value(self._uuid, "mirror_fps", int(row.get_value()))
+        self._config.set_device_value_for(self._info, "mirror_fps", int(row.get_value()))
         self._config.save()
 
     # ====================================================================

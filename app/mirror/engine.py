@@ -33,11 +33,14 @@ class MirrorEngine(ABC):
         self._running = False
 
     def cfg(self, key: str):
-        """Gerätespezifischer Config-Wert (mit globalem Default als Fallback)."""
+        """Gerätespezifischer Config-Wert (mit globalem Default als Fallback).
+
+        Liest über uuid *und* host-Fallback (siehe ``config.device_keys``), damit
+        Einstellungen einen Wechsel der Cast-uuid (echte uuid <-> host) überleben.
+        """
         info = getattr(self.receiver, "info", None)
-        uuid = getattr(info, "uuid", None)
-        if uuid and hasattr(self.config, "device_value"):
-            return self.config.device_value(uuid, key)
+        if info is not None and hasattr(self.config, "device_value_for"):
+            return self.config.device_value_for(info, key)
         return self.config[key]
 
     @abstractmethod
