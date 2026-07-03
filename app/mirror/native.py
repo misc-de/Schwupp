@@ -39,6 +39,8 @@ VIDEO_SSRC = 100001
 VIDEO_PT = 96
 NTP_EPOCH = 2208988800  # Sekunden zwischen 1900 und 1970
 TARGET_DELAY_MS = 150   # Playout-Puffer am Receiver
+FREEZE_TIMEOUT_S = 4.0  # so lange ohne neues Frame = Capture eingefroren -> Neustart
+MAX_RECOVERIES = 5      # mehr Neustarts in 60 s -> aufgeben (Capture dauerhaft kaputt)
 
 
 # -- RTCP-Hilfsfunktionen ----------------------------------------------------
@@ -104,9 +106,12 @@ class NativeMirrorEngine(MirrorEngine):
         self._key = b""
         self._iv = b""
         self._state = {"fid": 0, "seq": 0, "pk": 0, "oct": 0,
-                       "started": False, "coff": 0.0, "last_rtp": 0, "last_wall": 0.0}
+                       "started": False, "coff": 0.0, "last_rtp": 0, "last_wall": 0.0,
+                       "rtp_offset": 0, "rebase": False}
         self._buf_pkts: dict[int, dict[int, bytes]] = {}
         self._buf_lock = threading.Lock()
+        self._recovering = False
+        self._recover_times: list[float] = []
 
     @staticmethod
     def check_available() -> tuple[bool, str]:
@@ -125,6 +130,7 @@ class NativeMirrorEngine(MirrorEngine):
         if getattr(self.receiver, "kind", None) != "chromecast":
             raise RuntimeError("Natives Cast-Streaming nur für Cast-Geräte verfügbar")
         self._running = True
+        threading.Thread(target=self._watchdog_loop, daemon=True).start()
         fps = int(self.cfg("mirror_fps"))
         if not is_wayland():
             self._begin(x11_source_desc(fps=fps))
@@ -306,7 +312,14 @@ class NativeMirrorEngine(MirrorEngine):
                 return self._Gst.FlowReturn.OK
             self._state["started"] = True
         fid = self._state["fid"]
-        rtp_ts = int((buf.pts or 0) * 9 // 100000) & 0xFFFFFFFF  # 90 kHz
+        raw_ts = int((buf.pts or 0) * 9 // 100000)  # 90 kHz, ab Pipeline-Start
+        if self._state["rebase"]:
+            # Nach einem Capture-Neustart beginnt die Pipeline-PTS wieder bei ~0.
+            # Offset so wählen, dass die RTP-Zeit nahtlos vorwärts weiterläuft
+            # (sonst springt der Zeitstempel zurück -> Receiver verwirft/bricht ab).
+            self._state["rtp_offset"] = (self._state["last_rtp"] + 3000 - raw_ts) & 0xFFFFFFFF
+            self._state["rebase"] = False
+        rtp_ts = (raw_ts + self._state["rtp_offset"]) & 0xFFFFFFFF
         enc = encrypt_frame(data, fid, self._key, self._iv)
         packets, self._state["seq"] = rtp.packetize(
             payload=enc, frame_id=fid, is_key=is_key, reference_frame_id=fid - 1,
@@ -328,6 +341,68 @@ class NativeMirrorEngine(MirrorEngine):
         self._state["last_rtp"] = rtp_ts
         self._state["last_wall"] = time.time()
         return self._Gst.FlowReturn.OK
+
+    # -- Selbstheilung: eingefrorene Capture erkennen + neu starten ----------
+    def _watchdog_loop(self) -> None:
+        """Erkennt eine eingefrorene Capture (kein neues Frame) und startet sie neu.
+
+        Auf dem FLX1 kann eine Output-Zustandsänderung (Dimmen/Rotation/…) die
+        wlr-screencopy-Capture killen ("invalid buffer dimensions") -> wf-recorder
+        stirbt, das TV-Bild friert ein. Die Cast-Session bleibt dabei intakt, also
+        genügt ein Neustart von Capture + Encoder-Pipeline.
+        """
+        while self._running:
+            time.sleep(2)
+            if self._recovering or not self._state["started"]:
+                continue
+            last = self._state["last_wall"]
+            if last and time.time() - last > FREEZE_TIMEOUT_S:
+                self._recover()
+
+    def _recover(self) -> None:
+        if not self._running or self._recovering:
+            return
+        now = time.time()
+        self._recover_times = [t for t in self._recover_times if now - t < 60]
+        if len(self._recover_times) >= MAX_RECOVERIES:
+            print("[native] Capture wiederholt eingefroren – Spiegelung wird beendet")
+            self.stop()
+            return
+        self._recover_times.append(now)
+        self._recovering = True
+        print("[native] Capture eingefroren – starte neu (Auto-Recovery)")
+        try:
+            if self._pipeline is not None:
+                self._pipeline.set_state(self._Gst.State.NULL)
+                self._pipeline = None
+        except Exception:  # noqa: BLE001
+            pass
+        if self._wf is not None:
+            self._wf.stop()
+            self._wf = None
+        # Cast-Session/Socket/Schlüssel bleiben; nur neu erfassen + neuer Keyframe.
+        self._state["started"] = False   # nächstes gesendetes Frame wird Keyframe
+        self._state["rebase"] = True      # RTP-Zeit nahtlos fortsetzen
+        self._state["last_wall"] = 0.0
+        try:
+            fps = int(self.cfg("mirror_fps"))
+            height = int(self.cfg("mirror_height"))
+            width = (height * 16 // 9) // 2 * 2
+            bitrate = int(self.cfg("mirror_bitrate_kbps")) * 1000
+            self._source_desc = self._fresh_source(fps)
+            self._launch_encoder(width, height, fps, bitrate)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[native] Recovery fehlgeschlagen: {exc}")
+        self._recovering = False
+
+    def _fresh_source(self, fps: int) -> str:
+        """Frischen Capture-Quell-Desc bauen (für Recovery)."""
+        if not is_wayland():
+            return x11_source_desc(fps=fps)
+        if wf_recorder_available():
+            self._wf = WfRecorderCapture(fps=fps)
+            return self._wf.source_desc()
+        raise RuntimeError("kein Wayland-Capture für Recovery verfügbar")
 
     # -- Stop ----------------------------------------------------------------
     def stop(self) -> None:
