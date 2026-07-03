@@ -4,6 +4,9 @@
 * **LG webOS** – via ``_airplay._tcp`` (LG-TVs ab ~2019 kündigen AirPlay an;
   gefiltert auf Hersteller „LG"). Ältere LG ließen sich zusätzlich per SSDP
   finden – hier bewusst schlank gehalten.
+* **AirPlay-2-TVs** (Hisense/VIDAA, Samsung, Sony, Apple TV …) – alle übrigen
+  ``_airplay._tcp``-Ankündigungen als eigenes Backend ``airplay``
+  (PIN-Pairing + Wiedergabe via pyatv, siehe receivers/airplay.py).
 
 Liefert einheitliche :class:`ReceiverInfo`-Objekte. Callbacks kommen aus
 zeroconf-Threads – die GUI marshallt per ``GLib.idle_add``.
@@ -27,8 +30,9 @@ from pychromecast.models import CastInfo
 AIRPLAY_SERVICE = "_airplay._tcp.local."
 DLNA_RENDERER_ST = "urn:schemas-upnp-org:device:MediaRenderer:1"
 
-# Backend-Vorrang bei gleichem Host: Cast > webOS > DLNA (mehr Funktionen gewinnt)
-_KIND_PRIORITY = {"chromecast": 3, "webos": 2, "dlna": 1}
+# Backend-Vorrang bei gleichem Host: Cast > webOS > AirPlay > DLNA
+# (mehr Funktionen gewinnt; AirPlay schlägt DLNA wegen HLS-Spiegelung)
+_KIND_PRIORITY = {"chromecast": 4, "webos": 3, "airplay": 2, "dlna": 1}
 
 
 def _tag(xml: str, tag: str) -> str:
@@ -99,13 +103,13 @@ def _is_cast_receiver(host: str, port: int = 8009, timeout: float = 1.5) -> bool
 
 @dataclass(frozen=True)
 class ReceiverInfo:
-    kind: str          # "chromecast" | "webos" | "dlna"
+    kind: str          # "chromecast" | "webos" | "airplay" | "dlna"
     uuid: str
     name: str
     host: str
     port: int
     model: str
-    raw: object = None  # CastInfo (cast) | None (webos) | AVTransport-URL (dlna)
+    raw: object = None  # CastInfo (cast) | None (webos/airplay) | AVTransport-URL (dlna)
 
 
 class Discovery:
@@ -217,7 +221,7 @@ class Discovery:
     def _cast_removed(self, uuid: UUID, service: str, info: CastInfo) -> None:
         self._emit_remove(f"cast:{uuid}")
 
-    # -- LG webOS (AirPlay-Announcement) -------------------------------------
+    # -- AirPlay-Announcements (LG webOS + generische AirPlay-2-TVs) -----------
     def _airplay_change(self, zeroconf, service_type, name, state_change) -> None:  # noqa: ANN001
         if state_change is ServiceStateChange.Removed:
             return  # Host-Dedup hält den Eintrag; Cast-Remove räumt ihn ab
@@ -226,14 +230,21 @@ class Discovery:
             return
         props = {k.decode(errors="ignore"): (v or b"").decode(errors="ignore")
                  for k, v in (info.properties or {}).items()}
-        if props.get("manufacturer", "").upper() != "LG":
-            return  # nur LG-webOS-TVs (keine Apple-TVs o. Ä.)
         addrs = info.parsed_addresses(IPVersion.V4Only)  # IPv4 -> kein v4/v6-Duplikat
         if not addrs:
             return
         host = addrs[0]
         friendly = name.split("._airplay")[0]
         model = props.get("model", "")
+        # Nicht-LG (Hisense/VIDAA, Samsung, Sony, Apple TV …) -> AirPlay-Backend.
+        # Hat das Gerät zusätzlich einen Cast-Receiver (Android/Google-TV), kommt
+        # der über _googlecast bzw. Host-Dedup ohnehin mit höherem Vorrang.
+        if props.get("manufacturer", "").upper() != "LG":
+            self._emit_add(ReceiverInfo(
+                kind="airplay", uuid=f"airplay:{host}", name=friendly,
+                host=host, port=info.port or 7000, model=model, raw=None,
+            ))
+            return
         # Viele LG-TVs haben einen versteckten Cast-Receiver auf 8009 (ohne
         # _googlecast-mDNS). Cast bietet Media + YouTube + HLS-Mirror -> bevorzugen.
         if _is_cast_receiver(host):

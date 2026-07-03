@@ -42,7 +42,7 @@ class WebosReceiver(Receiver):
         self._dlna = DlnaRenderer(info.host)
 
     # -- Verbindung -----------------------------------------------------------
-    def connect(self, prompt_cb=None) -> None:  # noqa: ANN001
+    def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
         from pywebostv.connection import WebOSClient
         from pywebostv.controls import (ApplicationControl, MediaControl,
                                         SystemControl)

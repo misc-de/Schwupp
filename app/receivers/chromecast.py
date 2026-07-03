@@ -23,7 +23,7 @@ class ChromecastReceiver(Receiver):
             self._session = CastSession(host=info.host, port=info.port or 8009,
                                         name=info.name, model=info.model)
 
-    def connect(self, prompt_cb=None) -> None:  # noqa: ANN001
+    def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
         self._session.connect()
 
     def disconnect(self) -> None:

@@ -2,6 +2,7 @@
 # GTK4 / libadwaita / GStreamer kommen vom System (PyGObject), siehe README.
 pychromecast>=14.0
 pywebostv>=0.8.9
+pyatv>=0.16          # AirPlay-2-TVs (Hisense/VIDAA, Samsung …): PIN-Pairing + play_url
 cryptography>=42.0   # AES-128-CTR für den nativen Cast-Mirror
 requests>=2.31       # HTTP für den Selbst-Updater (ZIP-Strategie)
 yt-dlp>=2024.1       # Web-Video-Extraktion (Fallback); via `python -m yt_dlp`

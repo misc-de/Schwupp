@@ -25,7 +25,7 @@ from ..sources import youtube  # noqa: E402
 from .settings import SettingsDialog  # noqa: E402
 
 _KIND_ICON = {"chromecast": "video-display-symbolic", "webos": "tv-symbolic",
-              "dlna": "tv-symbolic"}
+              "airplay": "tv-symbolic", "dlna": "tv-symbolic"}
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -125,14 +125,47 @@ class MainWindow(Adw.ApplicationWindow):
         def prompt_cb() -> None:
             GLib.idle_add(self._toast, t("window.pairing"))
 
+        def pin_cb() -> str | None:
+            return self._ask_pin_blocking(info.name)
+
         def work() -> None:
             try:
-                receiver.connect(prompt_cb=prompt_cb)
+                receiver.connect(prompt_cb=prompt_cb, pin_cb=pin_cb)
                 GLib.idle_add(self._on_connected, receiver)
             except Exception as exc:  # noqa: BLE001
                 GLib.idle_add(self._toast, t("window.connect_failed", error=exc))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _ask_pin_blocking(self, name: str) -> str | None:
+        """PIN-Dialog im Hauptthread zeigen; blockiert den aufrufenden
+        Worker-Thread, bis der Nutzer eingibt oder abbricht (AirPlay-Pairing)."""
+        result: dict[str, str | None] = {}
+        done = threading.Event()
+
+        def show() -> bool:
+            dialog = Adw.AlertDialog(heading=t("window.pin_title"),
+                                     body=t("window.pin_body", name=name))
+            entry = Gtk.Entry(input_purpose=Gtk.InputPurpose.DIGITS,
+                              activates_default=True)
+            dialog.set_extra_child(entry)
+            dialog.add_response("cancel", t("window.pin_cancel"))
+            dialog.add_response("ok", t("window.pin_connect"))
+            dialog.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
+            dialog.set_default_response("ok")
+            dialog.set_close_response("cancel")
+
+            def on_response(_dialog, response) -> None:  # noqa: ANN001
+                result["pin"] = entry.get_text().strip() if response == "ok" else None
+                done.set()
+
+            dialog.connect("response", on_response)
+            dialog.present(self)
+            return False
+
+        GLib.idle_add(show)
+        done.wait(timeout=180)  # Pairing-Fenster am TV läuft ohnehin ab
+        return result.get("pin")
 
     def _on_connected(self, receiver) -> bool:  # noqa: ANN001
         self.receiver = receiver

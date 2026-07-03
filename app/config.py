@@ -27,6 +27,8 @@ _DEFAULTS: dict[str, Any] = {
     "last_update_check": "",
     # Gespeicherte webOS-client_keys je TV-Host: {"192.168.0.33": "<key>"}
     "webos_keys": {},
+    # Gespeicherte AirPlay-Pairing-Credentials je TV-Host (pyatv-Format)
+    "airplay_creds": {},
     # Gerätespezifische Overrides der DEVICE_KEYS je Geräte-UUID:
     #   {"cast:…": {"mirror_engine": "hls", "mirror_bitrate_kbps": 4000}}
     "device_overrides": {},

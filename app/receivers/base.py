@@ -51,9 +51,12 @@ class Receiver(ABC):
 
     # -- Lebenszyklus ---------------------------------------------------------
     @abstractmethod
-    def connect(self, prompt_cb=None) -> None:  # noqa: ANN001
+    def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
         """Verbindet. *prompt_cb* wird aufgerufen, falls am Gerät eine
-        Bestätigung nötig ist (z. B. webOS-Pairing-Dialog)."""
+        Bestätigung nötig ist (z. B. webOS-Pairing-Dialog). *pin_cb* wird
+        aufgerufen, wenn das Gerät eine PIN anzeigt (AirPlay): Es muss die
+        Nutzereingabe als str liefern (oder None bei Abbruch) und darf dafür
+        blockieren – connect läuft in einem Worker-Thread."""
 
     @abstractmethod
     def disconnect(self) -> None: ...

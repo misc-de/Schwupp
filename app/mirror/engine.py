@@ -120,9 +120,11 @@ def available_engines() -> list[EngineInfo]:
 # Welche Spiegel-Engines pro Gerätetyp sinnvoll sind. Reihenfolge = Vorzug.
 # webOS-only und reine DLNA-TVs bieten von Linux aus kein zuverlässiges
 # Live-Mirroring (siehe receivers/webos.py, docs/MIRRORING.md) -> leer.
+# AirPlay-TVs spielen HLS nativ -> HLS-Engine (play_url auf die Live-Playlist).
 _KIND_ENGINES: dict[str, tuple[str, ...]] = {
     "chromecast": ("native", "hls"),
     "webos": (),
+    "airplay": ("hls",),
     "dlna": (),
 }
 

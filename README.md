@@ -29,24 +29,28 @@ the fallback for unsupported locales).
 
 ## Features per device
 
-| Feature | Chromecast / Google TV | LG webOS (2024+) |
-|---|---|---|
-| Automatic discovery | ✅ | ✅ |
-| Local media files | ✅ | ✅ |
-| YouTube | ✅ | ✅ |
-| Web videos | ✅ | ✅ |
-| Play / pause / stop, volume | ✅ | ✅ |
-| Screen mirroring (native) | ✅ | ✅ |
-| Screen mirroring (HLS) | ✅ | ✅ |
+| Feature | Chromecast / Google TV | LG webOS (2024+) | AirPlay 2 (Hisense, Samsung …) |
+|---|---|---|---|
+| Automatic discovery | ✅ | ✅ | ✅ |
+| Local media files | ✅ | ✅ | ✅ |
+| YouTube | ✅ | ✅ | ✅ (as video stream) |
+| Web videos | ✅ | ✅ | ✅ |
+| Play / pause / stop, volume | ✅ | ✅ | stop (play/pause device-dependent) |
+| Screen mirroring (native) | ✅ | ✅ | — |
+| Screen mirroring (HLS) | ✅ | ✅ | ✅ |
 
 Most TVs are found and connected automatically. Newer LG webOS TVs (≈2024 and later)
 work just like a Chromecast, including screen mirroring.
 
+**AirPlay 2 TVs** (Hisense/VIDAA, Samsung Tizen, Sony, older non-Cast models …) pair
+with the code shown on the TV the first time you connect; the pairing is stored, so
+this happens only once.
+
 ### Other TVs
 
-**Samsung, Sony, Panasonic, Philips and many Hisense** TVs are also detected and can
-play your media, web videos and YouTube, with playback and volume control. (Screen
-mirroring on these needs a Chromecast.)
+**Samsung, Sony, Panasonic, Philips and many Hisense** TVs without AirPlay are also
+detected via DLNA and can play your media, web videos and YouTube, with playback and
+volume control. (Screen mirroring on these needs a Chromecast.)
 
 ## Screen mirroring
 
@@ -62,6 +66,7 @@ app/
     base.py          Receiver interface + feature gating
     chromecast.py    pychromecast
     webos.py         pywebostv (control/YouTube) + DLNA (media)
+    airplay.py       pyatv (AirPlay 2: PIN pairing + play_url)
   dlna.py          minimal UPnP-AVTransport client (webOS media)
   server/          local HTTP server (files w/ Range, HLS, live stream)
   sources/         YouTube / web video (yt-dlp)
@@ -131,7 +136,9 @@ app — no terminal needed.
 
 Open **Schwupp** from your app menu. The computer and TV must be on the same network
 and the TV must be on. The first time you connect to an LG TV, a pairing dialog appears
-on the TV — confirm it with the remote (the key is then stored).
+on the TV — confirm it with the remote (the key is then stored). On AirPlay TVs
+(e.g. Hisense) the TV shows a code instead — type it into the dialog in Schwupp
+(also stored, one-time).
 
 On startup Schwupp checks that everything it needs is installed: if something required
 is missing it tells you and stops; if only optional parts are missing it lists them and
@@ -150,6 +157,7 @@ Schwupp stands on the shoulders of these projects:
 |---|---|---|
 | [pychromecast](https://github.com/home-assistant-libs/pychromecast) | Google Cast protocol (incl. bundled `casttube` for YouTube) | LGPL-2.1 |
 | [pywebostv](https://github.com/supersaiyanmode/PyWebOSTV) | LG webOS SSAP control | MIT |
+| [pyatv](https://github.com/postlund/pyatv) | AirPlay 2 pairing & playback (Hisense, Samsung …) | MIT |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | web video extraction (fallback) | Unlicense |
 | [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | mDNS service discovery | LGPL-2.1 |
 | [cryptography](https://github.com/pyca/cryptography) | AES-128-CTR for the native mirror | Apache-2.0 / BSD |

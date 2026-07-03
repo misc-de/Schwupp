@@ -26,7 +26,7 @@ class DlnaReceiver(Receiver):
         self._dlna = DlnaRenderer(info.host, control=control)
 
     # -- Verbindung -----------------------------------------------------------
-    def connect(self, prompt_cb=None) -> None:  # noqa: ANN001
+    def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
         if self._dlna._control is None:
             if not self._dlna.resolve():
                 raise RuntimeError("Kein DLNA-AVTransport am Gerät gefunden")

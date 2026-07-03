@@ -170,10 +170,14 @@ class HlsMirrorEngine(MirrorEngine):
             self._wf.stop()
             self._wf = None
         # App am TV beenden (-> zurück zum Home), nicht nur die Wiedergabe stoppen.
+        # Cast-Geräte via quit_app; andere (AirPlay) über das generische stop().
         try:
             self.receiver.session.quit_app()
         except Exception:  # noqa: BLE001
-            pass
+            try:
+                self.receiver.stop()
+            except Exception:  # noqa: BLE001
+                pass
         if self._tmpdir:
             shutil.rmtree(self._tmpdir, ignore_errors=True)
             self._tmpdir = None
