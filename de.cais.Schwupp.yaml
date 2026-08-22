@@ -66,6 +66,13 @@ modules:
     sources:
       - type: archive
         url: https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.26.10.tar.xz
+        # gstreamer.freedesktop.org bricht Downloads regelmäßig ab (503 bzw.
+        # HTTP/2-Reset nach ~1 MB) und lässt damit CI-Läufe scheitern. Der
+        # Spiegel liegt neben dem Flatpak-Repo auf GitHub Pages; die sha256
+        # oben gilt für beide Quellen, ein abweichender Spiegel würde den Build
+        # abbrechen statt untergeschoben zu werden.
+        mirror-urls:
+          - https://misc-de.github.io/Schwupp/mirror/gst-plugins-good-1.26.10.tar.xz
         sha256: 7beacb5daba3c6751ebc1c85017d9b1d6de64e24798125932c73c8b1dbeb3bc9
         x-checker-data:
           type: html

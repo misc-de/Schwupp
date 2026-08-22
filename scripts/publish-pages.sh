@@ -40,6 +40,25 @@ touch "$worktree/.nojekyll"
 cp data/de.cais.Schwupp.flatpakrepo data/de.cais.Schwupp.gpg "$worktree/"
 cp -r "$repo_dir" "$worktree/repo"
 
+# Quellen spiegeln, die das Manifest unter .../mirror/ als Ausweichadresse
+# nennt (gstreamer.freedesktop.org bricht Downloads regelmäßig ab). Die Dateien
+# stammen aus dem Download-Cache von flatpak-builder; die sha256 im Manifest
+# gilt unverändert für beide Adressen.
+mapfile -t mirrored < <(grep -oP 'https://misc-de\.github\.io/Schwupp/mirror/\K\S+' \
+    de.cais.Schwupp.yaml 2>/dev/null | sort -u)
+if [[ ${#mirrored[@]} -gt 0 ]]; then
+    mkdir -p "$worktree/mirror"
+    for name in "${mirrored[@]}"; do
+        found=$(find .flatpak-builder/downloads -name "$name" -type f 2>/dev/null | head -1)
+        if [[ -n "$found" ]]; then
+            cp "$found" "$worktree/mirror/$name"
+            echo "  gespiegelt: $name"
+        else
+            echo "  WARNUNG: $name liegt nicht im Download-Cache – Spiegel bleibt unvollständig" >&2
+        fi
+    done
+fi
+
 cat > "$worktree/index.html" <<'HTML'
 <!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
