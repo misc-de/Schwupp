@@ -1,0 +1,8 @@
+[Flatpak Repo]
+Title=Schwupp
+Url=https://misc-de.github.io/Schwupp/repo/
+Homepage=https://github.com/misc-de/Schwupp
+Comment=Casten auf Chromecast, LG webOS, AirPlay und DLNA
+Description=Schwupp – Bildschirm, YouTube und Medien auf den Fernseher casten (Desktop & Phosh).
+Icon=https://raw.githubusercontent.com/misc-de/Schwupp/main/data/icons/hicolor/256x256/apps/de.cais.Schwupp.png
+GPGKey=mDMEaomjiBYJKwYBBAHaRw8BAQdAMIHOKC0x3xcTBwRDHjyIX6nIUvdBkbYfbstu7GZYHlS0JlNjaHd1cHAgRmxhdHBhayBSZXBvIDxmbGF0cGFrQGNhaXMuZGU+iJAEExYKADgWIQRTtBmqgyVHKkL0Laya9c0N95lKuwUCaomjiAIbAwULCQgHAgYVCgkICwIEFgIDAQIeAQIXgAAKCRCa9c0N95lKuyxRAQCEfImhUpxfEvPsm6zWBVEatY5ajq27PZLbGh86kK8dDwEAkTOjY19DwBgqCbHLZahRey4PRf8R/EjgO47yGA17Cwc=
