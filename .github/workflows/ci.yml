@@ -79,10 +79,18 @@ jobs:
           echo "::error::Quellen ließen sich nach 5 Anläufen nicht laden"
           exit 1
 
+      # flatpak-builder startet einen D-Bus, der ohne machine-id nicht hochkommt.
+      - name: Container vorbereiten
+        run: dbus-uuidgen > /etc/machine-id
+
       # --disable-download beweist nebenbei, dass der Build offline durchläuft
       # (Flathub-Anforderung): Alles muss aus den gepinnten Artefakten kommen.
+      # --disable-rofiles-fuse: Im Container gibt es kein nutzbares /dev/fuse –
+      # dasselbe Hindernis wie auf dem FLX1 (siehe scripts/build-arch.sh).
       - name: Bauen
-        run: flatpak-builder --disable-download --force-clean build-dir de.cais.Schwupp.yaml
+        run: |
+          flatpak-builder --disable-download --disable-rofiles-fuse \
+            --force-clean build-dir de.cais.Schwupp.yaml
 
   # Auf einem Release-Tag (v*) müssen Tag, VERSION-Datei und das oberste
   # <release> der Metainfo übereinstimmen – sonst wäre der Release inkonsistent
