@@ -136,12 +136,26 @@ flatpak-merge:
 	ostree --repo=$(FP_REPO) pull-local $(ARM_REPO)
 	@echo "Zusammengefuehrt. Jetzt: make flatpak-publish"
 
-# Signiert alle Commits im Repo nach (nötig für zusammengeführte Architekturen:
-# das Telefon baut ohne Schlüssel, sonst bliebe der aarch64-Commit unsigniert und
-# ließe sich aus einem GPG-geprüften Remote nicht installieren) und schreibt dann
-# Summary/AppStream/Statische-Deltas.
+# Signiert alle Commits im Repo nach und schreibt dann Summary/AppStream/
+# Statische-Deltas.
+#
+# Wichtig: `flatpak build-sign` signiert ohne --arch nur die Architektur DIESES
+# Rechners. Der auf dem Telefon gebaute aarch64-Commit bliebe sonst unsigniert –
+# und weil `remote-info` nur die (signierte) Summary prüft, fällt das erst beim
+# tatsächlichen Installieren auf: "GPG verification enabled, but no signatures
+# found". Deshalb wird über alle Architekturen im Repo iteriert.
 flatpak-publish:
-	$(if $(FP_GPG),flatpak build-sign $(FP_REPO) $(APPID) $(FP_GPGARGS),@true)
+ifneq ($(FP_GPG),)
+	@for arch in $$(find $(FP_REPO)/refs/heads/app/$(APPID) -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null); do \
+		echo "Signiere $(APPID) ($$arch)"; \
+		flatpak build-sign $(FP_REPO) $(APPID) --arch=$$arch $(FP_GPGARGS) || exit 1; \
+	done
+endif
+	@# Bestehende Deltas verwerfen: build-update-repo erzeugt nur fehlende neu.
+	@# Ein vor dem Signieren gebautes Delta trägt den unsignierten Commit in sich –
+	@# die Installation scheitert dann an "no signatures found", obwohl die
+	@# Signatur im Repo liegt (ohne --no-static-deltas nicht zu sehen).
+	rm -rf $(FP_REPO)/deltas $(FP_REPO)/delta-indexes
 	flatpak build-update-repo --generate-static-deltas --prune $(FP_GPGARGS) $(FP_REPO)
 	@echo "$(FP_REPO)/ ist fertig zum Hosten (per HTTPS ausliefern)."
 
