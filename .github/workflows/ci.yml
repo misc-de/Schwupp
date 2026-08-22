@@ -18,9 +18,10 @@ jobs:
           python-version: '3.11'
 
       # Die Tests kommen bewusst ohne GTK/GStreamer aus (reine Protokoll-,
-      # Server- und Konfigurationslogik), deshalb reicht hier plain Python.
+      # Server- und Konfigurationslogik). cryptography wird gebraucht, weil die
+      # AES-CTR-Frame-Verschlüsselung mitgetestet wird.
       - name: Install test dependencies
-        run: pip install pytest ruff
+        run: pip install pytest ruff cryptography
 
       - name: Lint (ruff)
         run: ruff check .
@@ -64,11 +65,24 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v4
-      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
-        with:
-          bundle: schwupp.flatpak
-          manifest-path: de.cais.Schwupp.yaml
-          cache-key: flatpak-builder-${{ github.sha }}
+
+      # gstreamer.freedesktop.org antwortet zeitweise mit 503 bzw. bricht
+      # HTTP/2-Verbindungen ab. Deshalb erst herunterladen (mit Anläufen), dann
+      # bauen – das trennt Netz-Aussetzer von echten Build-Fehlern.
+      - name: Quellen laden
+        run: |
+          for i in 1 2 3 4 5; do
+            flatpak-builder --download-only --force-clean build-dir de.cais.Schwupp.yaml && exit 0
+            echo "Versuch $i fehlgeschlagen – neuer Anlauf in 30 s"
+            sleep 30
+          done
+          echo "::error::Quellen ließen sich nach 5 Anläufen nicht laden"
+          exit 1
+
+      # --disable-download beweist nebenbei, dass der Build offline durchläuft
+      # (Flathub-Anforderung): Alles muss aus den gepinnten Artefakten kommen.
+      - name: Bauen
+        run: flatpak-builder --disable-download --force-clean build-dir de.cais.Schwupp.yaml
 
   # Auf einem Release-Tag (v*) müssen Tag, VERSION-Datei und das oberste
   # <release> der Metainfo übereinstimmen – sonst wäre der Release inkonsistent
