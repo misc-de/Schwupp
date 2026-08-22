@@ -80,3 +80,31 @@ Vor dem Cast-Fund wurden diese Wege erschöpfend getestet – **alle gescheitert
 - **Miracast/WFD**: Discovery + GO-Negotiation gelingen, aber die Wi-Fi-Direct-P2P-Gruppe
   ist unter NetworkManager nicht stabil (sofortiges `deinit`), dazu Single-Radio-Channel-
   Konflikt (STA 5 GHz Ch 52 vs. P2P Ch 149/157).
+
+
+---
+
+## Ton beim Spiegeln (seit 0.2.0)
+
+Die native Engine sendet den Systemton als **zweiten RTP-Stream** (Opus, eigener
+SSRC und eigener frame_id-Raum, PT=127, 48 kHz). Drei Punkte sind dabei wichtig:
+
+1. **Der Receiver darf ablehnen.** Das ANSWER nennt in `sendIndexes`, welche der
+   angebotenen Streams er tatsächlich will. Fehlt der Audio-Index, läuft die
+   Spiegelung stumm weiter – kein Abbruch. Verschluckt ein Gerät ein OFFER mit
+   Audio ganz, bietet der zweite Versuch nur noch Video an.
+2. **NACKs müssen pro Stream zugeordnet werden.** Das Cast-Feedback trägt die
+   `media_ssrc` in Byte 8–11; ohne Auswertung würden Audio-NACKs Video-Pakete
+   erneut senden (und umgekehrt) und beide Decoder aushungern.
+3. **Eigene Sender Reports je Stream.** Video und Audio haben getrennte
+   RTP-Uhren (90 kHz bzw. 48 kHz); der Uhr-Offset zum Gerät wird gemeinsam aus
+   den XR-Paketen gemessen und auf beide angewandt.
+
+Die Tonquelle ist der Monitor der Standard-Ausgabe (`pulsesrc device=<sink>.monitor`,
+funktioniert unter PulseAudio wie unter PipeWire). Die Audio-Pipeline läuft
+bewusst getrennt von der Video-Pipeline: Fällt die Tonquelle aus (Gerätewechsel,
+kein Monitor), stirbt nur sie – das Bild läuft weiter.
+
+HLS und DLNA-TS führen den Ton als AAC-Spur mit; ohne verfügbare Tonquelle
+bleibt dort die stille Spur, weil manche Receiver einen reinen Video-Stream
+verwerfen.

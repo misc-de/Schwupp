@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Schwupp
+GenericName=Cast App
+GenericName[de]=Cast-App
+Comment=Cast your screen, YouTube and media to the TV
+Comment[de]=Bildschirm, YouTube und Medien auf den Fernseher casten
+Exec=schwupp
+Icon=de.cais.Schwupp
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=Cast;Chromecast;webOS;AirPlay;DLNA;Mirror;Stream;TV;
+Keywords[de]=Cast;Chromecast;webOS;AirPlay;DLNA;Spiegeln;Mirror;Stream;Fernseher;TV;
+StartupNotify=true
+StartupWMClass=de.cais.Schwupp
+X-Purism-FormFactor=Workstation;Mobile;

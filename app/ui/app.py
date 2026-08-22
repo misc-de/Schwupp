@@ -10,7 +10,6 @@ from gi.repository import Adw, Gio  # noqa: E402
 from .. import APP_ID  # noqa: E402
 from ..config import Config  # noqa: E402
 from ..i18n import t  # noqa: E402
-from ..net import lan_ip  # noqa: E402
 from ..server.httpserver import MediaServer  # noqa: E402
 from .window import MainWindow  # noqa: E402
 
@@ -23,9 +22,10 @@ class SchwuppApp(Adw.Application):
         )
         self._missing_optional = list(missing_optional or [])
         self.config = Config()
-        # Server für lokale Dateien + HLS; an die LAN-IP gebunden, damit das
-        # Cast-Gerät ihn erreicht.
-        self.server = MediaServer(lan_ip())
+        # Server für lokale Dateien, HLS und Live-Streams. Er lauscht auf allen
+        # Interfaces; welche IP das jeweilige Gerät ansprechen muss, entscheidet
+        # der Server beim Registrieren pro Gerät (siehe MediaServer.base_url).
+        self.server = MediaServer()
         self.server.start()
 
     def do_activate(self) -> None:

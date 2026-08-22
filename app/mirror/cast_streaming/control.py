@@ -62,11 +62,13 @@ def video_stream(index: int, ssrc: int, aes_key_hex: str, aes_iv_hex: str,
     }
 
 
-def audio_stream(index: int, ssrc: int, aes_key_hex: str, aes_iv_hex: str) -> dict:
+def audio_stream(index: int, ssrc: int, aes_key_hex: str, aes_iv_hex: str,
+                 bitrate: int = 128000, target_delay: int = 200) -> dict:
+    """Stream-Definition für den Systemton (Opus, 48 kHz stereo)."""
     return {
         "index": index, "type": "audio_source", "codecName": "opus",
         "rtpProfile": "cast", "rtpPayloadType": 127, "ssrc": ssrc,
-        "bitRate": 128000, "timeBase": "1/48000", "channels": 2,
+        "bitRate": bitrate, "timeBase": "1/48000", "channels": 2,
         "aesKey": aes_key_hex, "aesIvMask": aes_iv_hex,
-        "receiverRtcpEventLog": True, "targetDelay": 200,
+        "receiverRtcpEventLog": True, "targetDelay": target_delay,
     }

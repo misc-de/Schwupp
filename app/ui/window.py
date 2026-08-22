@@ -36,6 +36,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.receiver = None
         self.engine = None
+        self._mirror_btn = None
+        self._mirror_row = None
+        self._shared_file_url: str | None = None
         self._rows: dict[str, Adw.ActionRow] = {}
 
         self._toasts = Adw.ToastOverlay()
@@ -270,12 +273,22 @@ class MainWindow(Adw.ApplicationWindow):
         path = gfile.get_path()
         if not path:
             return
-        url = self.app.server.add_file(path)
+        # Vorherige Freigabe zurücknehmen: sonst bliebe jede jemals gecastete
+        # Datei bis zum Beenden der App im LAN abrufbar.
+        self._release_file()
+        url = self.app.server.add_file(path, client_host=self.receiver.host)
+        self._shared_file_url = url
         mime = mimetypes.guess_type(path)[0] or "video/mp4"
         title = os.path.basename(path)
         self._toast(t("window.sending", title=title))
         self._async(lambda: self.receiver.play_media(url, mime, title=title),
                     err=t("window.play_failed"))
+
+    def _release_file(self) -> None:
+        """Gibt die zuletzt freigegebene lokale Datei wieder frei."""
+        url, self._shared_file_url = getattr(self, "_shared_file_url", None), None
+        if url:
+            self.app.server.remove_file(url)
 
     def _cast_url(self, row) -> None:  # noqa: ANN001
         url = row.get_text().strip()
@@ -298,15 +311,13 @@ class MainWindow(Adw.ApplicationWindow):
         self._async(work, err=t("window.link_failed"))
 
     def _toggle_mirror(self, _btn) -> None:  # noqa: ANN001
-        # Läuft (oder hängt nach Startfehler) eine Engine -> stoppen.
+        # Läuft (oder startet gerade) eine Engine -> stoppen.
         if self.engine is not None:
             try:
                 self.engine.stop()
             finally:
                 self.engine = None
-            self._mirror_btn.set_label(t("window.start"))
-            self._mirror_btn.remove_css_class("destructive-action")
-            self._mirror_btn.add_css_class("suggested-action")
+            self._mirror_idle()
             self._toast(t("window.mirror_stopped"))
             return
 
@@ -324,17 +335,48 @@ class MainWindow(Adw.ApplicationWindow):
         if not ok:
             self._toast(f"{cls.display_name}: {detail}")
             return
-        self.engine = cls(self.receiver, self.app.server, self.app.config)
-        try:
-            self.engine.start()
-        except Exception as exc:  # noqa: BLE001
-            self.engine = None
-            self._toast(str(exc))
+        # Der Start ist asynchron (Bildschirmfreigabe, Geräte-Handshake,
+        # Segment-Vorlauf). Die Engine meldet Erfolg bzw. Fehler per Callback;
+        # bis dahin zeigt der Knopf "Stopp", damit abgebrochen werden kann.
+        self.engine = cls(self.receiver, self.app.server, self.app.config,
+                          on_error=self._on_engine_error,
+                          on_started=lambda c=cls: self._on_engine_started(c))
+        self._mirror_active()
+        self._toast(t("window.mirror_starting"))
+        self.engine.start()
+
+    # -- Zustand des Spiegel-Knopfs ------------------------------------------
+    def _mirror_active(self) -> None:
+        if getattr(self, "_mirror_btn", None) is None:
             return
         self._mirror_btn.set_label(t("window.stop"))
         self._mirror_btn.remove_css_class("suggested-action")
         self._mirror_btn.add_css_class("destructive-action")
-        self._toast(t("window.mirror_running", engine=cls.display_name))
+
+    def _mirror_idle(self) -> None:
+        if getattr(self, "_mirror_btn", None) is None:
+            return
+        self._mirror_btn.set_label(t("window.start"))
+        self._mirror_btn.remove_css_class("destructive-action")
+        self._mirror_btn.add_css_class("suggested-action")
+
+    def _on_engine_started(self, cls) -> None:  # noqa: ANN001
+        """Meldung der Engine: Übertragung läuft (aus einem Worker-Thread)."""
+        GLib.idle_add(self._toast, t("window.mirror_running", engine=cls.display_name))
+
+    def _on_engine_error(self, text: str) -> None:
+        """Meldung der Engine: Start/Betrieb gescheitert (aus jedem Thread).
+
+        Früher landeten solche Fehler nur auf stdout – die Oberfläche zeigte
+        weiter eine laufende Spiegelung an, die es nie gab.
+        """
+        def show() -> bool:
+            self.engine = None
+            self._mirror_idle()
+            self._toast(t("window.mirror_failed", error=text))
+            return False
+
+        GLib.idle_add(show)
 
     # ====================================================================
     # Navigation / Aufräumen
@@ -349,6 +391,7 @@ class MainWindow(Adw.ApplicationWindow):
                 self.engine.stop()
             finally:
                 self.engine = None
+        self._release_file()
         if self.receiver is not None:
             self.receiver.disconnect()
             self.receiver = None

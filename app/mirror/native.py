@@ -3,7 +3,7 @@
 Sendet den Bildschirm per echtem Cast-Streaming-Protokoll statt über HLS:
   1. Mirroring-Receiver-App starten + OFFER/ANSWER über den webrtc-Namespace
      (-> ausgehandelter UDP-Port, AES-Key/IV).  [cast_streaming.control]
-  2. H.264 mit GStreamer encoden (appsink), je Frame:
+  2. H.264 (Video) und Opus (Systemton) mit GStreamer encoden (appsink), je Frame:
      AES-128-CTR verschlüsseln [crypto] -> in Cast-RTP-Pakete zerlegen [rtp]
      -> per UDP an den ausgehandelten Port senden.
 
@@ -17,211 +17,188 @@ Drei hart erarbeitete Bausteine, ohne die der Receiver schwarz bleibt/abbricht:
     (PT=206, magic 'CAST'); ohne erneutes Senden bleibt der Decoder stehen.
 Der TV-Uhr-Offset wird laufend aus den XR-Paketen (PT=207, Receiver Reference
 Time) des Receivers gemessen.
+
+Audio läuft als zweiter RTP-Stream (Opus, eigener SSRC und frame_id-Raum) und
+ist strikt optional: Lehnt der Receiver den Audio-Stream im ANSWER ab oder gibt
+es keine Monitor-Quelle, wird nur Video gesendet – die Spiegelung läuft weiter.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import socket
-import struct
 import threading
 import time
 
-from .capture import (PortalScreenCast, WfRecorderCapture, is_wayland,
-                      pipewire_source_desc, screencast_portal_available,
-                      wf_recorder_available, x11_source_desc)
-from .cast_streaming import rtp
-from .cast_streaming.control import (CastStreamingControl, MIRRORING_APP_ID,
-                                     video_stream)
+from .capture import audio_source_desc, default_monitor_device, h264_encoder_desc
+from .cast_streaming import rtcp, rtp
+from .cast_streaming.control import (
+    MIRRORING_APP_ID,
+    CastStreamingControl,
+    audio_stream,
+    video_stream,
+)
 from .cast_streaming.crypto import encrypt_frame
-from .engine import MirrorEngine, gst_element_exists
+from .engine import MirrorEngine, gst_element_exists, gst_init
 
 VIDEO_SSRC = 100001
+AUDIO_SSRC = 100003
 VIDEO_PT = 96
-NTP_EPOCH = 2208988800  # Sekunden zwischen 1900 und 1970
+AUDIO_PT = 127
+VIDEO_CLOCK = 90000
+AUDIO_CLOCK = 48000
 TARGET_DELAY_MS = 150   # Playout-Puffer am Receiver
+AUDIO_TARGET_DELAY_MS = 150
 FREEZE_TIMEOUT_S = 4.0  # so lange ohne neues Frame = Capture eingefroren -> Neustart
 MAX_RECOVERIES = 5      # mehr Neustarts in 60 s -> aufgeben (Capture dauerhaft kaputt)
+RETAIN_FRAMES = 90      # Paketpuffer für Retransmits (~3 s bei 30 fps)
 
 
-# -- RTCP-Hilfsfunktionen ----------------------------------------------------
-def _walk(d: bytes):
-    """Iteriert die Sub-Pakete eines RTCP-Compound: (packet_type, offset, size)."""
-    off = 0
-    while off + 4 <= len(d):
-        pt = d[off + 1]
-        ln = struct.unpack("!H", d[off + 2:off + 4])[0]
-        size = (ln + 1) * 4
-        if size <= 0 or off + size > len(d):
-            break
-        yield pt, off, size
-        off += size
+class _StreamState:
+    """Sendezustand eines RTP-Streams (Video oder Audio).
 
+    Video und Audio haben je einen eigenen frame_id-, Sequenz- und
+    Zeitstempel-Raum; gemeinsam ist nur der UDP-Socket und die Uhr-Korrektur.
+    """
 
-def _ntp_to_unix(n: int) -> float:
-    return (n >> 32) - NTP_EPOCH + ((n & 0xFFFFFFFF) / (1 << 32))
-
-
-def _parse_nacks(d: bytes):
-    """Cast-Feedback (PT=206, magic 'CAST') -> Liste (frame8, packet_id, bitmask)."""
-    for pt, off, size in _walk(d):
-        if pt == 206 and d[off + 12:off + 16] == b"CAST":
-            fci = d[off + 12:off + size]
-            fields = []
-            o = 8
-            while o + 4 <= len(fci):
-                fields.append((fci[o], struct.unpack("!H", fci[o + 1:o + 3])[0], fci[o + 3]))
-                o += 4
-            return fields
-    return None
-
-
-def _find_xr_reftime(d: bytes):
-    """XR (PT=207) Receiver Reference Time (BT=4) -> 64-bit-NTP der TV-Uhr."""
-    for pt, off, size in _walk(d):
-        if pt == 207:
-            o = off + 8
-            while o + 4 <= off + size:
-                bt = d[o]
-                blen = struct.unpack("!H", d[o + 2:o + 4])[0]
-                if bt == 4 and o + 12 <= len(d):
-                    return struct.unpack("!Q", d[o + 4:o + 12])[0]
-                o += 4 + blen * 4
-    return None
+    def __init__(self, ssrc: int, payload_type: int, clock: int) -> None:
+        self.ssrc = ssrc
+        self.payload_type = payload_type
+        self.clock = clock
+        self.fid = 0
+        self.seq = 0
+        self.packets = 0
+        self.octets = 0
+        self.started = False
+        self.last_rtp = 0
+        self.last_wall = 0.0
+        self.rtp_offset = 0
+        self.rebase = False
+        self.buffer: dict[int, dict[int, bytes]] = {}
+        self.lock = threading.Lock()
 
 
 class NativeMirrorEngine(MirrorEngine):
     name = "native"
     display_name = "Nativ"
 
-    def __init__(self, receiver, server, config) -> None:  # noqa: ANN001
-        super().__init__(receiver, server, config)
+    def __init__(self, receiver, server, config, on_error=None) -> None:  # noqa: ANN001
+        super().__init__(receiver, server, config, on_error)
         self._pipeline = None
+        self._audio_pipeline = None
         self._Gst = None
         self._ctrl: CastStreamingControl | None = None
         self._sock: socket.socket | None = None
         self._dest = None
-        self._portal: PortalScreenCast | None = None
-        self._wf: WfRecorderCapture | None = None
         self._source_desc = ""
         self._key = b""
         self._iv = b""
-        self._state = {"fid": 0, "seq": 0, "pk": 0, "oct": 0,
-                       "started": False, "coff": 0.0, "last_rtp": 0, "last_wall": 0.0,
-                       "rtp_offset": 0, "rebase": False}
-        self._buf_pkts: dict[int, dict[int, bytes]] = {}
-        self._buf_lock = threading.Lock()
+        self._video = _StreamState(VIDEO_SSRC, VIDEO_PT, VIDEO_CLOCK)
+        self._audio = _StreamState(AUDIO_SSRC, AUDIO_PT, AUDIO_CLOCK)
+        self._audio_active = False
+        self._clock_offset = 0.0
         self._recovering = False
         self._recover_times: list[float] = []
+        self._streams_by_ssrc = {VIDEO_SSRC: self._video, AUDIO_SSRC: self._audio}
 
     @staticmethod
     def check_available() -> tuple[bool, str]:
-        if not gst_element_exists("x264enc"):
-            return False, "GStreamer-Element x264enc fehlt (gst-plugins-ugly)"
+        from .capture import available_encoders, capture_available
+
+        if not available_encoders():
+            return False, ("Kein H.264-Encoder in GStreamer gefunden "
+                           "(x264enc aus gst-plugins-ugly empfohlen)")
         try:
             import cryptography  # noqa: F401
         except ImportError:
             return False, "Python-Paket 'cryptography' fehlt"
+        ok, detail = capture_available()
+        if not ok:
+            return False, detail
         return True, "Bereit"
 
     # -- Start ---------------------------------------------------------------
     def start(self) -> None:
-        if self._running:
-            return
         if getattr(self.receiver, "kind", None) != "chromecast":
-            raise RuntimeError("Natives Cast-Streaming nur für Cast-Geräte verfügbar")
-        self._running = True
-        threading.Thread(target=self._watchdog_loop, daemon=True).start()
-        fps = int(self.cfg("mirror_fps"))
-        if not is_wayland():
-            self._begin(x11_source_desc(fps=fps))
-        elif screencast_portal_available():
-            # Wayland mit ScreenCast-Portal (PipeWire-Handshake, evtl. Dialog).
-            self._portal = PortalScreenCast(fps=fps)
-            self._portal.start(self._on_portal_ready)
-        elif wf_recorder_available():
-            # Kein Portal (z. B. phoc ohne xdg-desktop-portal-wlr) -> wf-recorder.
-            self._wf = WfRecorderCapture(fps=fps)
-            self._begin(self._wf.source_desc())
-        else:
-            print("[native] Kein Wayland-Capture verfügbar "
-                  "(weder ScreenCast-Portal noch wf-recorder)")
-            self._running = False
-
-    def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
-        if not self._running:
-            return  # bereits wieder gestoppt, während der Portal-Dialog lief
-        if fd is None:
-            # Kein ScreenCast-Portal -> Fallback auf wf-recorder (wlr-screencopy).
-            if wf_recorder_available():
-                print(f"[native] Portal nicht verfügbar ({node_or_err}); wf-recorder-Fallback")
-                self._wf = WfRecorderCapture(fps=int(self.cfg("mirror_fps")))
-                self._begin(self._wf.source_desc())
-                return
-            print(f"[native] Bildschirmfreigabe nicht möglich: {node_or_err}")
-            self._running = False
+            self.fail("Natives Cast-Streaming ist nur für Cast-Geräte verfügbar")
             return
-        self._begin(pipewire_source_desc(fd, node_or_err, int(self.cfg("mirror_fps"))))
+        super().start()
+        threading.Thread(target=self._watchdog_loop, daemon=True,
+                         name="mirror-watchdog").start()
 
-    def _begin(self, source_desc: str) -> None:
+    def run(self, source_desc: str) -> None:
+        """Handshake mit dem Gerät und Start der Encoder (im Worker-Thread)."""
         self._source_desc = source_desc
-        threading.Thread(target=self._run, daemon=True).start()
+        cc = self.receiver.session.chromecast  # pychromecast-Instanz
+        self._ctrl = CastStreamingControl()
+        cc.register_handler(self._ctrl)
+        # Hängenden Mirror-App-Zustand (z. B. aus abgebrochenem Lauf) sauber
+        # zurücksetzen – ohne das antwortet der Receiver oft nicht aufs OFFER.
+        with contextlib.suppress(Exception):
+            cc.quit_app()
+            time.sleep(2)
+        self._ctrl.launch()
+        # Auf die Mirroring-App warten (langsamere Geräte wie das FLX1
+        # brauchen länger), max. ~8 s.
+        for _ in range(16):
+            if not self._running:
+                return
+            time.sleep(0.5)
+            if getattr(cc.status, "app_id", None) == MIRRORING_APP_ID:
+                break
+        time.sleep(1)
 
-    def _run(self) -> None:
-        try:
-            cc = self.receiver.session.chromecast  # pychromecast-Instanz
-            self._ctrl = CastStreamingControl()
-            cc.register_handler(self._ctrl)
-            # Hängenden Mirror-App-Zustand (z. B. aus abgebrochenem Lauf) sauber
-            # zurücksetzen – ohne das antwortet der Receiver oft nicht aufs OFFER.
-            try:
-                cc.quit_app()
-                time.sleep(2)
-            except Exception:  # noqa: BLE001
-                pass
-            self._ctrl.launch()
-            # Auf die Mirroring-App warten (langsamere Geräte wie das FLX1
-            # brauchen länger), max. ~8 s.
-            for _ in range(16):
-                time.sleep(0.5)
-                if getattr(cc.status, "app_id", None) == MIRRORING_APP_ID:
-                    break
-            time.sleep(1)
+        self._key = os.urandom(16)
+        self._iv = os.urandom(16)
+        width, height, fps, bitrate_kbps = self.video_params()
+        bitrate = bitrate_kbps * 1000
+        target_delay = self.cfg_int("mirror_target_delay_ms", TARGET_DELAY_MS)
 
-            self._key = os.urandom(16)
-            self._iv = os.urandom(16)
-            height = int(self.cfg("mirror_height"))
-            width = (height * 16 // 9) // 2 * 2
-            fps = int(self.cfg("mirror_fps"))
-            bitrate = int(self.cfg("mirror_bitrate_kbps")) * 1000
-            try:
-                target_delay = int(self.cfg("mirror_target_delay_ms"))
-            except (KeyError, TypeError, ValueError):
-                target_delay = TARGET_DELAY_MS
+        want_audio = bool(self.cfg("mirror_audio")) and self._audio_available()
+        offer_video = video_stream(
+            0, VIDEO_SSRC, self._key.hex(), self._iv.hex(), width, height, fps, bitrate,
+            target_delay=target_delay)
+        offer_audio = audio_stream(
+            1, AUDIO_SSRC, self._key.hex(), self._iv.hex(),
+            target_delay=AUDIO_TARGET_DELAY_MS) if want_audio else None
 
-            offer = video_stream(
-                0, VIDEO_SSRC, self._key.hex(), self._iv.hex(), width, height, fps, bitrate,
-                target_delay=target_delay)
-            answer = None
-            for _ in range(3):  # Retry: erstes OFFER wird manchmal verschluckt
-                if not self._running:
-                    return
-                self._ctrl.send_offer(offer)
-                answer = self._ctrl.wait_answer(10)
-                if answer and "udpPort" in answer:
-                    break
-                time.sleep(1.5)
-            if not answer or "udpPort" not in answer:
-                raise RuntimeError(f"Cast-Streaming: kein gültiges ANSWER ({answer})")
+        answer = None
+        for attempt in range(3):  # Retry: erstes OFFER wird manchmal verschluckt
+            if not self._running:
+                return
+            self._ctrl.send_offer(offer_video, offer_audio)
+            answer = self._ctrl.wait_answer(10)
+            if answer and "udpPort" in answer:
+                break
+            # Manche Receiver verschlucken ein OFFER mit Audio-Stream komplett;
+            # ab dem zweiten Versuch daher nur noch Video anbieten.
+            if attempt == 0 and offer_audio is not None:
+                offer_audio = None
+            time.sleep(1.5)
+        if not answer or "udpPort" not in answer:
+            raise RuntimeError(f"Cast-Streaming: kein gültiges ANSWER ({answer})")
 
-            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._sock.bind(("", 0))
-            self._dest = (self.receiver.host, answer["udpPort"])
-            threading.Thread(target=self._rx_loop, daemon=True).start()
-            threading.Thread(target=self._sr_loop, daemon=True).start()
-            self._launch_encoder(width, height, fps, bitrate)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[native] Start fehlgeschlagen: {exc}")
-            self._running = False
+        # Der Receiver nennt in sendIndexes, welche der angebotenen Streams er
+        # tatsächlich will. Fehlt der Audio-Index, läuft die Spiegelung stumm.
+        send_indexes = answer.get("sendIndexes")
+        self._audio_active = bool(
+            offer_audio is not None
+            and (send_indexes is None or 1 in send_indexes)
+        )
+
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind(("", 0))
+        self._dest = (self.receiver.host, answer["udpPort"])
+        threading.Thread(target=self._rx_loop, daemon=True, name="mirror-rtcp").start()
+        threading.Thread(target=self._sr_loop, daemon=True, name="mirror-sr").start()
+        self._launch_encoder(width, height, fps, bitrate)
+        if self._audio_active:
+            self._launch_audio_encoder()
+
+    # -- Verfügbarkeit Systemton ---------------------------------------------
+    @staticmethod
+    def _audio_available() -> bool:
+        return gst_element_exists("opusenc") and audio_source_desc() is not None
 
     # -- RTCP: Feedback empfangen (NACK -> Retransmit, XR -> Uhr-Offset) ------
     def _rx_loop(self) -> None:
@@ -229,118 +206,188 @@ class NativeMirrorEngine(MirrorEngine):
         while self._running:
             try:
                 d, _ = self._sock.recvfrom(2048)
-            except (socket.timeout, OSError):
+            except (TimeoutError, OSError):
                 continue
-            rn = _find_xr_reftime(d)
+            rn = rtcp.find_xr_reftime(d)
             if rn is not None:
-                off = _ntp_to_unix(rn) - time.time()
-                c = self._state["coff"]
-                self._state["coff"] = off if c == 0.0 else c * 0.85 + off * 0.15
-            fields = _parse_nacks(d)
+                off = rtcp.ntp_to_unix(rn) - time.time()
+                c = self._clock_offset
+                self._clock_offset = off if c == 0.0 else c * 0.85 + off * 0.15
+            media_ssrc, fields = rtcp.parse_nacks(d)
             if not fields:
                 continue
-            for f8, pid, mask in fields:
-                with self._buf_lock:
-                    cands = [f for f in self._buf_pkts if (f & 0xFF) == f8]
-                    if not cands:
-                        continue
-                    pkts = self._buf_pkts[max(cands)]
-                    want = list(pkts) if pid == 0xFFFF else \
-                        [pid] + [pid + 1 + i for i in range(8) if mask & (1 << i)]
-                    resend = [pkts[p] for p in want if p in pkts]
-                for p in resend:
-                    try:
-                        self._sock.sendto(p, self._dest)
-                    except OSError:
-                        break
+            stream = self._streams_by_ssrc.get(media_ssrc, self._video)
+            self._retransmit(stream, fields)
+
+    def _retransmit(self, stream: _StreamState, fields) -> None:  # noqa: ANN001
+        for f8, pid, mask in fields:
+            with stream.lock:
+                cands = [f for f in stream.buffer if (f & 0xFF) == f8]
+                if not cands:
+                    continue
+                pkts = stream.buffer[max(cands)]
+                want = list(pkts) if pid == 0xFFFF else \
+                    [pid] + [pid + 1 + i for i in range(8) if mask & (1 << i)]
+                resend = [pkts[p] for p in want if p in pkts]
+            for p in resend:
+                try:
+                    self._sock.sendto(p, self._dest)
+                except OSError:
+                    return
 
     # -- RTCP: Sender Report (Uhr-Sync, auf TV-Uhr verschoben) ----------------
     def _sr_loop(self) -> None:
         while self._running:
-            if self._state["started"] and self._state["last_wall"]:
-                w = self._state["last_wall"] + self._state["coff"]
-                sec = int(w) + NTP_EPOCH
-                frac = int((w % 1) * (1 << 32)) & 0xFFFFFFFF
-                sr = struct.pack("!BBHIIIIII", 0x80, 200, 6, VIDEO_SSRC, sec, frac,
-                                 self._state["last_rtp"] & 0xFFFFFFFF,
-                                 self._state["pk"] & 0xFFFFFFFF, self._state["oct"] & 0xFFFFFFFF)
-                try:
-                    self._sock.sendto(sr, self._dest)
-                except OSError:
-                    pass
+            for stream in (self._video, self._audio):
+                if stream is self._audio and not self._audio_active:
+                    continue
+                if stream.started and stream.last_wall:
+                    self._send_sender_report(stream)
             time.sleep(0.2)
 
+    def _send_sender_report(self, stream: _StreamState) -> None:
+        sr = rtcp.sender_report(stream.ssrc, stream.last_wall + self._clock_offset,
+                                stream.last_rtp, stream.packets, stream.octets)
+        with contextlib.suppress(OSError):
+            self._sock.sendto(sr, self._dest)
+
+    # -- Encoder --------------------------------------------------------------
     def _launch_encoder(self, width: int, height: int, fps: int, bitrate: int) -> None:
-        import gi
-
-        gi.require_version("Gst", "1.0")
-        from gi.repository import Gst
-
-        if not Gst.is_initialized():
-            Gst.init(None)
+        Gst = gst_init()
         self._Gst = Gst
 
+        encoder = h264_encoder_desc(bitrate // 1000, fps,
+                                    str(self.cfg("mirror_encoder") or "auto"))
         src = self._source_desc  # X11 (ximagesrc) oder Wayland (pipewiresrc/wf-recorder)
         desc = (
             f"{src} ! videoconvert ! videoscale add-borders=true "
             f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
-            f"! x264enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate // 1000} "
-            f"key-int-max={fps} ! video/x-h264,profile=main,stream-format=byte-stream "
+            f"! {encoder} "
+            f"! video/x-h264,profile=main,stream-format=byte-stream "
             f"! h264parse config-interval=-1 "
             f"! appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true"
         )
         self._pipeline = Gst.parse_launch(desc)
-        self._pipeline.get_by_name("sink").connect("new-sample", self._on_sample)
+        self._pipeline.get_by_name("sink").connect("new-sample", self._on_video_sample)
+        bus = self._pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_video_error)
         self._pipeline.set_state(Gst.State.PLAYING)
 
-    def _on_sample(self, sink):  # noqa: ANN001
+    def _launch_audio_encoder(self) -> None:
+        """Systemton (Monitor der Standard-Ausgabe) als Opus-Stream.
+
+        Bewusst eine eigene Pipeline: Fällt die Audioquelle aus (Gerätewechsel,
+        fehlender Monitor), stirbt nur sie – das Bild läuft weiter.
+        """
+        Gst = self._Gst
+        src = audio_source_desc()
+        if src is None:
+            self._audio_active = False
+            return
+        device = default_monitor_device()
+        if device and src.startswith("pulsesrc"):
+            src = src.replace("pulsesrc ", f'pulsesrc device="{device}" ', 1)
+        desc = (
+            f"{src} ! audio/x-raw,rate=48000,channels=2 "
+            f"! opusenc bitrate=128000 frame-size=10 inband-fec=false "
+            f"! appsink name=asink emit-signals=true sync=false max-buffers=8 drop=true"
+        )
+        try:
+            self._audio_pipeline = Gst.parse_launch(desc)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[native] Systemton nicht verfügbar ({exc}) – Spiegelung bleibt stumm")
+            self._audio_active = False
+            return
+        self._audio_pipeline.get_by_name("asink").connect("new-sample", self._on_audio_sample)
+        bus = self._audio_pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_audio_error)
+        self._audio_pipeline.set_state(Gst.State.PLAYING)
+
+    def _on_video_error(self, _bus, message) -> None:  # noqa: ANN001
+        err, dbg = message.parse_error()
+        self.fail(f"GStreamer-Fehler beim Spiegeln: {err}")
+
+    def _on_audio_error(self, _bus, message) -> None:  # noqa: ANN001
+        err, _dbg = message.parse_error()
+        print(f"[native] Systemton-Pipeline gestoppt: {err} – Bild läuft weiter")
+        self._audio_active = False
+
+    # -- Samples -> RTP -------------------------------------------------------
+    def _pull(self, sink):  # noqa: ANN001
+        """Sample abholen und als (bytes, pts, is_keyframe) liefern."""
         sample = sink.emit("pull-sample")
         if sample is None or not self._running:
-            return self._Gst.FlowReturn.OK
+            return None
         buf = sample.get_buffer()
         ok, info = buf.map(self._Gst.MapFlags.READ)
         if not ok:
-            return self._Gst.FlowReturn.OK
+            return None
         try:
             data = bytes(info.data)
         finally:
             buf.unmap(info)
         is_key = not (buf.get_flags() & self._Gst.BufferFlags.DELTA_UNIT)
+        return data, (buf.pts or 0), is_key
+
+    def _on_video_sample(self, sink):  # noqa: ANN001
+        got = self._pull(sink)
+        if got is None:
+            return self._Gst.FlowReturn.OK
+        data, pts, is_key = got
         # Erst ab dem ersten Keyframe senden -> dieses wird Frame 0.
-        if not self._state["started"]:
+        if not self._video.started:
             if not is_key:
                 return self._Gst.FlowReturn.OK
-            self._state["started"] = True
-        fid = self._state["fid"]
-        raw_ts = int((buf.pts or 0) * 9 // 100000)  # 90 kHz, ab Pipeline-Start
-        if self._state["rebase"]:
+            self._video.started = True
+        self._send_frame(self._video, data, is_key=is_key, pts_ns=pts)
+        return self._Gst.FlowReturn.OK
+
+    def _on_audio_sample(self, sink):  # noqa: ANN001
+        if not self._audio_active:
+            return self._Gst.FlowReturn.OK
+        got = self._pull(sink)
+        if got is None:
+            return self._Gst.FlowReturn.OK
+        data, pts, _ = got
+        # Opus-Frames sind voneinander unabhängig -> immer "Keyframe".
+        self._audio.started = True
+        self._send_frame(self._audio, data, is_key=True, pts_ns=pts)
+        return self._Gst.FlowReturn.OK
+
+    def _send_frame(self, stream: _StreamState, data: bytes, *, is_key: bool,
+                    pts_ns: int) -> None:
+        fid = stream.fid
+        raw_ts = int(pts_ns * stream.clock // 1_000_000_000)
+        if stream.rebase:
             # Nach einem Capture-Neustart beginnt die Pipeline-PTS wieder bei ~0.
             # Offset so wählen, dass die RTP-Zeit nahtlos vorwärts weiterläuft
             # (sonst springt der Zeitstempel zurück -> Receiver verwirft/bricht ab).
-            self._state["rtp_offset"] = (self._state["last_rtp"] + 3000 - raw_ts) & 0xFFFFFFFF
-            self._state["rebase"] = False
-        rtp_ts = (raw_ts + self._state["rtp_offset"]) & 0xFFFFFFFF
+            step = stream.clock // 30 or 1
+            stream.rtp_offset = (stream.last_rtp + step - raw_ts) & 0xFFFFFFFF
+            stream.rebase = False
+        rtp_ts = (raw_ts + stream.rtp_offset) & 0xFFFFFFFF
         enc = encrypt_frame(data, fid, self._key, self._iv)
-        packets, self._state["seq"] = rtp.packetize(
+        packets, stream.seq = rtp.packetize(
             payload=enc, frame_id=fid, is_key=is_key, reference_frame_id=fid - 1,
-            ssrc=VIDEO_SSRC, payload_type=VIDEO_PT, rtp_timestamp=rtp_ts,
-            seq=self._state["seq"],
+            ssrc=stream.ssrc, payload_type=stream.payload_type, rtp_timestamp=rtp_ts,
+            seq=stream.seq,
         )
-        with self._buf_lock:
-            self._buf_pkts[fid] = {i: p for i, p in enumerate(packets)}
-            for old in [f for f in self._buf_pkts if f < fid - 90]:
-                del self._buf_pkts[old]
+        with stream.lock:
+            stream.buffer[fid] = dict(enumerate(packets))
+            for old in [f for f in stream.buffer if f < fid - RETAIN_FRAMES]:
+                del stream.buffer[old]
         for p in packets:
             try:
                 self._sock.sendto(p, self._dest)
             except OSError:
                 break
-            self._state["oct"] += len(p) - 12
-        self._state["pk"] += len(packets)
-        self._state["fid"] = fid + 1
-        self._state["last_rtp"] = rtp_ts
-        self._state["last_wall"] = time.time()
-        return self._Gst.FlowReturn.OK
+            stream.octets += len(p) - 12
+        stream.packets += len(packets)
+        stream.fid = fid + 1
+        stream.last_rtp = rtp_ts
+        stream.last_wall = time.time()
 
     # -- Selbstheilung: eingefrorene Capture erkennen + neu starten ----------
     def _watchdog_loop(self) -> None:
@@ -353,9 +400,9 @@ class NativeMirrorEngine(MirrorEngine):
         """
         while self._running:
             time.sleep(2)
-            if self._recovering or not self._state["started"]:
+            if self._recovering or not self._video.started:
                 continue
-            last = self._state["last_wall"]
+            last = self._video.last_wall
             if last and time.time() - last > FREEZE_TIMEOUT_S:
                 self._recover()
 
@@ -365,60 +412,49 @@ class NativeMirrorEngine(MirrorEngine):
         now = time.time()
         self._recover_times = [t for t in self._recover_times if now - t < 60]
         if len(self._recover_times) >= MAX_RECOVERIES:
-            print("[native] Capture wiederholt eingefroren – Spiegelung wird beendet")
-            self.stop()
+            self.fail("Bildschirmaufnahme friert wiederholt ein – Spiegelung beendet")
             return
         self._recover_times.append(now)
         self._recovering = True
         print("[native] Capture eingefroren – starte neu (Auto-Recovery)")
-        try:
+        with contextlib.suppress(Exception):
             if self._pipeline is not None:
                 self._pipeline.set_state(self._Gst.State.NULL)
                 self._pipeline = None
-        except Exception:  # noqa: BLE001
-            pass
-        if self._wf is not None:
-            self._wf.stop()
-            self._wf = None
         # Cast-Session/Socket/Schlüssel bleiben; nur neu erfassen + neuer Keyframe.
-        self._state["started"] = False   # nächstes gesendetes Frame wird Keyframe
-        self._state["rebase"] = True      # RTP-Zeit nahtlos fortsetzen
-        self._state["last_wall"] = 0.0
+        self._video.started = False   # nächstes gesendetes Frame wird Keyframe
+        self._video.rebase = True     # RTP-Zeit nahtlos fortsetzen
+        self._video.last_wall = 0.0
         try:
-            fps = int(self.cfg("mirror_fps"))
-            height = int(self.cfg("mirror_height"))
-            width = (height * 16 // 9) // 2 * 2
-            bitrate = int(self.cfg("mirror_bitrate_kbps")) * 1000
-            self._source_desc = self._fresh_source(fps)
-            self._launch_encoder(width, height, fps, bitrate)
+            source = self._capture.restart_sync() if self._capture else None
+            if source is None:
+                self.fail("Bildschirmaufnahme abgebrochen – bitte erneut starten "
+                          "(Freigabe muss neu bestätigt werden)")
+                return
+            self._source_desc = source
+            width, height, fps, bitrate_kbps = self.video_params()
+            self._launch_encoder(width, height, fps, bitrate_kbps * 1000)
         except Exception as exc:  # noqa: BLE001
-            print(f"[native] Recovery fehlgeschlagen: {exc}")
-        self._recovering = False
-
-    def _fresh_source(self, fps: int) -> str:
-        """Frischen Capture-Quell-Desc bauen (für Recovery)."""
-        if not is_wayland():
-            return x11_source_desc(fps=fps)
-        if wf_recorder_available():
-            self._wf = WfRecorderCapture(fps=fps)
-            return self._wf.source_desc()
-        raise RuntimeError("kein Wayland-Capture für Recovery verfügbar")
+            self.fail(f"Neustart der Bildschirmaufnahme fehlgeschlagen: {exc}")
+            return
+        finally:
+            self._recovering = False
 
     # -- Stop ----------------------------------------------------------------
     def stop(self) -> None:
         self._running = False
-        if self._pipeline is not None:
-            self._pipeline.set_state(self._Gst.State.NULL)
-            self._pipeline = None
+        self._audio_active = False
+        for attr in ("_pipeline", "_audio_pipeline"):
+            pipeline = getattr(self, attr, None)
+            if pipeline is not None:
+                with contextlib.suppress(Exception):
+                    pipeline.set_state(self._Gst.State.NULL)
+                setattr(self, attr, None)
         if self._sock is not None:
             self._sock.close()
             self._sock = None
-        if self._wf is not None:
-            self._wf.stop()
-            self._wf = None
+        self._stop_capture()
         # Mirroring-App am TV beenden (-> zurück zum Home). media_controller.stop()
         # greift hier NICHT, da die Mirror-App läuft, nicht der Media-Receiver.
-        try:
+        with contextlib.suppress(Exception):
             self.receiver.session.quit_app()
-        except Exception:  # noqa: BLE001
-            pass

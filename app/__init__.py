@@ -1,19 +1,27 @@
-"""Schwupp – Casten auf Chromecast/Google-TV unter Linux.
+"""Schwupp – Casten auf Chromecast/Google-TV, LG webOS, AirPlay und DLNA.
 
 Pakete:
   cast/    – Geräte-Discovery und Steuerung (pychromecast)
   server/  – lokaler HTTP-Server (lokale Dateien + HLS-Segmente ausliefern)
   sources/ – Quellen (YouTube, …)
-  mirror/  – austauschbare Bildschirm-Spiegel-Engines (native/hls/openscreen)
+  mirror/  – austauschbare Bildschirm-Spiegel-Engines (native/hls/dlnats)
   ui/      – GTK4/libadwaita-Oberfläche (adaptiv: Desktop & Phosh-Phone)
 """
 
-from pathlib import Path as _Path
+from .paths import data_file as _data_file
 
 APP_ID = "de.cais.Schwupp"
 APP_NAME = "Schwupp"
 
-# Version aus der VERSION-Datei im Projekt-Root (Single Source of Truth, auch
-# vom Updater zum Versionsvergleich genutzt). Fallback, falls Datei fehlt.
-_VERSION_FILE = _Path(__file__).parent.parent / "VERSION"
-VERSION = _VERSION_FILE.read_text(encoding="utf-8").strip() if _VERSION_FILE.exists() else "0.1.0"
+
+def _read_version() -> str:
+    """Version aus der VERSION-Datei (Single Source of Truth, auch vom Updater
+    zum Versionsvergleich genutzt). Der Pfad wird über :mod:`app.paths` gesucht,
+    damit Git-Klon, Flatpak und pip-Installation gleichermaßen funktionieren."""
+    try:
+        return _data_file("VERSION").read_text(encoding="utf-8").strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+VERSION = _read_version()

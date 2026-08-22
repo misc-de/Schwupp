@@ -1,0 +1,144 @@
+# Flatpak-Manifest für Schwupp (eigenes Repo, x86_64 + aarch64).
+#
+# Lokal bauen & installieren:
+#   flatpak install flathub org.gnome.Platform//49 org.gnome.Sdk//49
+#   flatpak-builder --user --install --force-clean build-dir de.cais.Schwupp.yaml
+#   flatpak run de.cais.Schwupp
+#
+# Bequemer über den Makefile:  make flatpak-build && make flatpak-publish
+#
+# Der Build läuft offline: Die Python-Abhängigkeiten sind in
+# python3-modules.yaml als sha256-gepinnte Wheels/Sdists hinterlegt (erzeugt mit
+# flatpak-pip-generator aus requirements.txt). Nach Änderungen an den
+# Abhängigkeiten muss die Datei neu erzeugt werden – siehe `make pip-modules`.
+id: de.cais.Schwupp
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+command: schwupp
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  # X11-Sitzungen (XFCE, Cinnamon …): dort gibt es meist kein ScreenCast-Portal,
+  # gespiegelt wird über ximagesrc – dafür muss der X11-Socket durchgereicht sein.
+  - --socket=fallback-x11
+  # Geräte-Suche (mDNS/SSDP), Cast-Steuerung und der lokale Medien-Server im LAN.
+  - --share=network
+  # Systemton beim Spiegeln: Monitor der Standard-Ausgabe über die
+  # Pulse-Kompatibilität von PipeWire.
+  - --socket=pulseaudio
+  # Hardware-Encoder (VA-API) nutzen, wo vorhanden – spart auf dem Telefon
+  # spürbar Rechenzeit gegenüber x264.
+  - --device=dri
+  # Mediendateien: Die Auswahl läuft über den Dateidialog des Portals; der
+  # Lesezugriff auf die üblichen Medienordner erspart den Umweg bei Dateien,
+  # die per Drag oder zuletzt-benutzt kommen.
+  - --filesystem=xdg-videos:ro
+  - --filesystem=xdg-music:ro
+  - --filesystem=xdg-download:ro
+  # Mitgelieferte GStreamer-Plugins (ximagesrc) zusätzlich zu denen der Runtime.
+  - --env=GST_PLUGIN_PATH=/app/lib/gstreamer-1.0
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - /lib/debug
+  - '*.a'
+  - '*.la'
+
+modules:
+  # ximagesrc fehlt in der GNOME-Runtime (gst-plugins-good ist dort ohne
+  # X11-Unterstützung gebaut). Ohne dieses Element kann das Flatpak auf einer
+  # X11-Sitzung den Bildschirm nicht aufnehmen. Es wird nur dieses eine Plugin
+  # gebaut, alles andere bleibt abgeschaltet.
+  - name: gst-plugins-good-ximagesrc
+    buildsystem: meson
+    config-opts:
+      - -Dauto_features=disabled
+      - -Dximagesrc=enabled
+      - -Dtests=disabled
+      - -Dexamples=disabled
+      - -Dnls=disabled
+      - -Ddoc=disabled
+      - -Dorc=disabled
+    sources:
+      - type: archive
+        url: https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-1.26.10.tar.xz
+        sha256: 7beacb5daba3c6751ebc1c85017d9b1d6de64e24798125932c73c8b1dbeb3bc9
+        x-checker-data:
+          type: html
+          url: https://gstreamer.freedesktop.org/src/gst-plugins-good/
+          version-pattern: gst-plugins-good-(\d+\.\d+\.\d+)\.tar\.xz
+          url-template: https://gstreamer.freedesktop.org/src/gst-plugins-good/gst-plugins-good-$version.tar.xz
+
+  # Bildschirmaufnahme auf wlroots-Compositoren ohne Portal-Backend – genau der
+  # Fall auf dem FuriPhone FLX1 (phoc, kein xdg-desktop-portal-wlr). Ohne
+  # wf-recorder bliebe die Spiegelung dort ohne Bildquelle.
+  - name: wf-recorder
+    buildsystem: meson
+    config-opts:
+      # Den Ton nimmt Schwupp selbst über GStreamer auf – wf-recorder liefert
+      # hier ausschließlich das Bild.
+      - -Dpulse=disabled
+      - -Dpipewire=disabled
+    sources:
+      - type: archive
+        url: https://github.com/ammen99/wf-recorder/archive/refs/tags/v0.6.0.tar.gz
+        sha256: 52d2c952506d63708f9a8f1aacd4d6ca176287caf3507c8ff2882fa0390cb391
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/ammen99/wf-recorder/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: '"https://github.com/ammen99/wf-recorder/archive/refs/tags/v" + $version + ".tar.gz"'
+
+  # yt-dlp als gepinnte, sha256-verifizierte Binary mitliefern (statt sie zur
+  # Laufzeit ungeprüft von GitHub zu laden). app/sources/youtube.py findet sie
+  # über shutil.which.
+  - name: yt-dlp
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 yt-dlp /app/bin/yt-dlp
+    sources:
+      - type: file
+        url: https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp
+        sha256: 1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest
+          version-query: .tag_name
+          url-query: .assets[] | select(.name == "yt-dlp") | .browser_download_url
+
+  # cffi muss VOR den übrigen Python-Modulen stehen: miniaudio (Abhängigkeit
+  # von pyatv) baut seine C-Erweiterung per cffi und überspringt diesen Schritt
+  # stillschweigend, wenn cffi zum Build-Zeitpunkt noch nicht importierbar ist –
+  # pyatv scheitert dann zur Laufzeit an "No module named _miniaudio".
+  - python3-cffi.yaml
+
+  # Python-Abhängigkeiten (pychromecast, pywebostv, pyatv, cryptography,
+  # requests und deren Unterbau) – offline aus gepinnten Artefakten.
+  - python3-modules.yaml
+
+  - name: schwupp
+    buildsystem: simple
+    build-commands:
+      # Installiert das Paket, den Starter /app/bin/schwupp sowie VERSION,
+      # lang/, .desktop, Metainfo und Icon an ihre XDG-Plätze (siehe die
+      # data-files in pyproject.toml). app/paths.py findet die Daten dann
+      # unter /app/share/schwupp.
+      # --no-deps: Die Abhängigkeiten liefert python3-modules.yaml; yt-dlp
+      # kommt als eigene Binary (siehe oben), nicht als Python-Paket.
+      - pip3 install --no-index --no-deps --no-build-isolation --prefix=/app .
+    sources:
+      - type: dir
+        path: .
+        skip:
+          - .git
+          - .venv
+          - .flatpak-builder
+          - .flathub-tools
+          - .flatpak-build
+          - build-dir
+          - repo
+          - repo-arm

@@ -1,11 +1,37 @@
 [project]
 name = "schwupp"
-version = "0.1.0"
-description = "Casten von Medien, YouTube und Bildschirm auf Chromecast/Google-TV unter Linux (Desktop & Phosh-Phone)"
+dynamic = ["version"]
+description = "Bildschirm, YouTube und Medien auf Chromecast, LG webOS, AirPlay und DLNA casten (Linux-Desktop & Phosh-Phone)"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "misc-de" }]
+keywords = ["chromecast", "cast", "webos", "airplay", "dlna", "screen-mirroring", "gtk4"]
+classifiers = [
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video",
+]
+# PyGObject/GTK4/libadwaita und GStreamer kommen vom System (siehe README) und
+# stehen deshalb bewusst nicht hier.
 dependencies = [
     "pychromecast>=14.0",
+    "pywebostv>=0.8.9",
+    "pyatv>=0.16",
+    "cryptography>=42.0",
+    "requests>=2.31",
+    "yt-dlp>=2024.1",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/misc-de/Schwupp"
+Source = "https://github.com/misc-de/Schwupp"
 
 [project.scripts]
 schwupp = "app.__main__:main"
@@ -14,5 +40,48 @@ schwupp = "app.__main__:main"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+# VERSION und die Übersetzungen liegen außerhalb des Pakets. Als data-files
+# landen sie unter <prefix>/share/schwupp – genau dort sucht app/paths.py sie,
+# wenn die App nicht aus einem Git-Klon läuft.
+[tool.setuptools.data-files]
+"share/schwupp" = ["VERSION"]
+"share/schwupp/lang" = ["lang/de.json", "lang/en.json"]
+"share/applications" = ["data/de.cais.Schwupp.desktop"]
+"share/metainfo" = ["data/de.cais.Schwupp.metainfo.xml"]
+"share/icons/hicolor/256x256/apps" = ["data/icons/hicolor/256x256/apps/de.cais.Schwupp.png"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "SIM", "C90", "I", "UP"]
+ignore = [
+    "E501",    # Zeilenlänge prüft der Formatter-Blick, nicht der Linter
+    "B008",    # Funktionsaufruf im Default-Argument (GTK-Idiom)
+    "B027",    # leere Hooks in der Receiver-ABC sind Absicht (optionale Features)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Die Hilfsskripte in tools/ sind Wegwerf-Prototypen der Protokollarbeit.
+"tools/*" = ["E", "F", "W", "B", "SIM", "C90", "I", "UP"]
+# GTK verlangt Imports nach gi.require_version – Reihenfolge ist dort Vorschrift.
+"app/ui/*" = ["E402"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["error::DeprecationWarning:app.*"]

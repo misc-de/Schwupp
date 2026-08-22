@@ -16,11 +16,14 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
+import contextlib
+
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from .. import VERSION, updater  # noqa: E402
 from ..i18n import t  # noqa: E402
 from ..mirror import engines_for_kind  # noqa: E402
+from ..mirror.capture import ENCODER_CHOICES, available_encoders  # noqa: E402
 
 _RESOLUTIONS = [720, 1080, 2160]  # 16:9-Zielhöhen für die Auswahl
 
@@ -87,6 +90,26 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._fps.connect("notify::value", self._on_fps)
         grp_video.add(self._fps)
 
+        self._audio = Adw.SwitchRow(title=t("settings.audio"),
+                                    subtitle=t("settings.audio_sub"))
+        self._audio.set_active(bool(self._config.device_value_for(info, "mirror_audio")))
+        self._audio.connect("notify::active", self._on_audio)
+        grp_video.add(self._audio)
+
+        # Encoder-Wahl nur zeigen, wenn es überhaupt etwas zu wählen gibt.
+        encoders = available_encoders()
+        if len(encoders) > 1:
+            self._encoder_choices = ["auto", *[e for e in ENCODER_CHOICES[1:] if e in encoders]]
+            labels = [t("settings.encoder_auto") if c == "auto" else c
+                      for c in self._encoder_choices]
+            self._encoder_row = Adw.ComboRow(title=t("settings.encoder"),
+                                             model=Gtk.StringList.new(labels))
+            current = str(self._config.device_value_for(info, "mirror_encoder") or "auto")
+            if current in self._encoder_choices:
+                self._encoder_row.set_selected(self._encoder_choices.index(current))
+            self._encoder_row.connect("notify::selected", self._on_encoder)
+            grp_video.add(self._encoder_row)
+
     def _on_engine_changed(self, row, _p) -> None:  # noqa: ANN001
         self._config.set_device_value_for(self._info, "mirror_engine",
                                           self._engines[row.get_selected()].name)
@@ -105,6 +128,15 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._config.set_device_value_for(self._info, "mirror_fps", int(row.get_value()))
         self._config.save()
 
+    def _on_audio(self, row, _p) -> None:  # noqa: ANN001
+        self._config.set_device_value_for(self._info, "mirror_audio", bool(row.get_active()))
+        self._config.save()
+
+    def _on_encoder(self, row, _p) -> None:  # noqa: ANN001
+        self._config.set_device_value_for(self._info, "mirror_encoder",
+                                          self._encoder_choices[row.get_selected()])
+        self._config.save()
+
     # ====================================================================
     # Global: App / Updates
     # ====================================================================
@@ -116,19 +148,28 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._reset_src = 0
         self._update_row = Adw.ActionRow(title="Schwupp")
         self._update_row.set_subtitle(self._version_subtitle())
+        grp_app.add(self._update_row)
+
+        # Im Flatpak (und bei systemweiter Installation) gehört das Update dem
+        # Paketmanager – ein Selbst-Update käme gegen ein schreibgeschütztes
+        # /app ohnehin nicht an.
+        supported, reason = updater.updates_supported()
+        if not supported:
+            self._update_btn = None
+            self._update_row.set_subtitle(
+                f"v{VERSION}  ·  {t('settings.updates_' + reason)}")
+            return
+
         self._update_btn = Gtk.Button(label=t("settings.check_updates"), valign=Gtk.Align.CENTER)
         self._update_btn.connect("clicked", self._on_check_update)
         self._update_row.add_suffix(self._update_btn)
-        grp_app.add(self._update_row)
 
     def _version_subtitle(self) -> str:
         last = self._config["last_update_check"]
         if last:
-            try:
+            with contextlib.suppress(ValueError):
                 last = t("settings.last_checked",
                          date=datetime.fromisoformat(last).strftime("%d.%m.%Y %H:%M"))
-            except ValueError:
-                pass
         return f"v{VERSION}" + (f"  ·  {last}" if last else "")
 
     def _on_check_update(self, _btn) -> None:  # noqa: ANN001
@@ -179,10 +220,8 @@ class SettingsDialog(Adw.PreferencesDialog):
             self._update_btn.remove_css_class("suggested-action")
             self._update_btn.set_label(t("settings.restart_required"))
             self._update_btn.set_sensitive(True)
-            try:
+            with contextlib.suppress(TypeError):
                 self._update_btn.disconnect_by_func(self._on_apply_update)
-            except TypeError:
-                pass
             self._update_btn.connect("clicked", self._show_restart_dialog)
             self._show_restart_dialog(None)
         else:

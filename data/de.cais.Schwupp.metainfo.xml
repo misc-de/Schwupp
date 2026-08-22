@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>de.cais.Schwupp</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Schwupp</name>
+  <summary>Cast your screen, YouTube and media to the TV</summary>
+  <summary xml:lang="de">Bildschirm, YouTube und Medien auf den Fernseher casten</summary>
+
+  <description>
+    <p>
+      Schwupp is a self-contained casting app for Linux desktops and Linux
+      phones running Phosh. It streams your screen, YouTube and local media to
+      the TV and supports Chromecast / Google TV, LG webOS, AirPlay 2 and DLNA
+      from a single adaptive interface — without depending on external command
+      line tools.
+    </p>
+    <p xml:lang="de">
+      Schwupp ist eine eigenständige Cast-App für Linux-Desktops und
+      Linux-Phones mit Phosh. Sie überträgt Bildschirm, YouTube und lokale
+      Medien auf den Fernseher und unterstützt Chromecast / Google TV,
+      LG webOS, AirPlay 2 und DLNA aus einer einzigen, adaptiven Oberfläche –
+      ohne externe Kommandozeilen-Werkzeuge.
+    </p>
+    <p>Features:</p>
+    <p xml:lang="de">Funktionen:</p>
+    <ul>
+      <li>Native low-latency screen mirroring to Chromecast (under one second, with sound)</li>
+      <li xml:lang="de">Native Bildschirmspiegelung auf Chromecast mit unter einer Sekunde Verzögerung – mit Ton</li>
+      <li>HLS mirroring as a robust fallback, also for AirPlay TVs</li>
+      <li xml:lang="de">HLS-Spiegelung als robuster Rückfall, auch für AirPlay-Fernseher</li>
+      <li>Play local video and music files, straight from your device</li>
+      <li xml:lang="de">Lokale Video- und Musikdateien direkt vom Gerät abspielen</li>
+      <li>Start YouTube in the TV's own app, or cast any web video</li>
+      <li xml:lang="de">YouTube in der TV-eigenen App starten oder beliebige Web-Videos casten</li>
+      <li>Play, pause, stop and volume for the running playback</li>
+      <li xml:lang="de">Wiedergabe, Pause, Stopp und Lautstärke für die laufende Wiedergabe</li>
+      <li>Automatic discovery; pairing with LG and AirPlay TVs is stored after the first time</li>
+      <li xml:lang="de">Automatische Suche; das Pairing mit LG- und AirPlay-Fernsehern wird nach dem ersten Mal gespeichert</li>
+    </ul>
+    <p>
+      Media files are only ever read, never modified. Nothing is uploaded
+      anywhere: the app serves your files from a local server that only your
+      TV talks to.
+    </p>
+    <p xml:lang="de">
+      Mediendateien werden ausschließlich gelesen, niemals verändert. Es wird
+      nichts hochgeladen: Die App liefert die Dateien über einen lokalen
+      Server aus, mit dem nur der Fernseher spricht.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">de.cais.Schwupp.desktop</launchable>
+
+  <url type="homepage">https://github.com/misc-de/Schwupp</url>
+  <url type="bugtracker">https://github.com/misc-de/Schwupp/issues</url>
+  <url type="vcs-browser">https://github.com/misc-de/Schwupp</url>
+
+  <developer id="de.cais">
+    <name>misc-de</name>
+  </developer>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+
+  <!-- Adaptive Oberfläche: läuft am Desktop und im schmalen Hochformat. -->
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+
+  <keywords>
+    <keyword>Cast</keyword>
+    <keyword>Chromecast</keyword>
+    <keyword>webOS</keyword>
+    <keyword>AirPlay</keyword>
+    <keyword>DLNA</keyword>
+    <keyword>Screen mirroring</keyword>
+    <keyword xml:lang="de">Spiegeln</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1" />
+
+  <branding>
+    <color type="primary" scheme_preference="light">#c0e3ff</color>
+    <color type="primary" scheme_preference="dark">#1a3a52</color>
+  </branding>
+
+  <releases>
+    <release version="0.2.0" date="2026-08-22">
+      <description>
+        <p>Screen mirroring now carries the system sound, and failures are reported in the app instead of the terminal.</p>
+        <p xml:lang="de">Die Bildschirmspiegelung überträgt jetzt den Systemton, und Fehler erscheinen in der App statt nur im Terminal.</p>
+        <ul>
+          <li>Native mirroring sends audio as a second Opus stream</li>
+          <li xml:lang="de">Native Spiegelung sendet Ton als zweiten Opus-Stream</li>
+          <li>HLS and DLNA mirroring carry an AAC audio track</li>
+          <li xml:lang="de">HLS- und DLNA-Spiegelung übertragen eine AAC-Tonspur</li>
+          <li>Mirroring no longer freezes the window while it starts</li>
+          <li xml:lang="de">Die Spiegelung blockiert das Fenster beim Start nicht mehr</li>
+          <li>Devices that disappear are removed from the list again</li>
+          <li xml:lang="de">Verschwundene Geräte verschwinden wieder aus der Liste</li>
+          <li>Encoder selection with hardware support (VA-API, V4L2)</li>
+          <li xml:lang="de">Encoder-Auswahl mit Hardware-Unterstützung (VA-API, V4L2)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.1.14" date="2026-07-03">
+      <description>
+        <p>Automatic recovery when the screen capture freezes, and AirPlay 2 support for Hisense, Samsung and others.</p>
+        <p xml:lang="de">Automatische Wiederherstellung bei eingefrorener Bildschirmaufnahme und AirPlay-2-Unterstützung für Hisense, Samsung und andere.</p>
+      </description>
+    </release>
+  </releases>
+</component>

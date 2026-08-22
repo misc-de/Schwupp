@@ -2,100 +2,80 @@
 
 Nimmt den Bildschirm mit GStreamer auf, kodiert nach H.264, segmentiert per
 ``hlssink2`` in eine .m3u8-Playlist + .ts-Segmente in einem Temp-Verzeichnis,
-liefert diese über den lokalen Server aus und sagt dem Cast-Gerät, es solle die
+liefert diese über den lokalen Server aus und sagt dem Gerät, es solle die
 Playlist als Live-Stream abspielen.
 
-Robust und mit jedem Chromecast kompatibel; Preis ist die Latenz (einige
-Sekunden), weil HLS puffert. Gut für Film/Präsentation, nicht für Spiele.
+Robust und mit jedem Chromecast (und jedem AirPlay-TV) kompatibel; Preis ist die
+Latenz (einige Sekunden), weil HLS puffert. Gut für Film/Präsentation, nicht für
+Spiele. Der Systemton wird als AAC-Spur mitgesendet, sofern eine Monitor-Quelle
+verfügbar ist – sonst läuft eine stille Spur mit, weil manche Receiver einen
+reinen Video-Stream verwerfen.
 """
 from __future__ import annotations
 
+import contextlib
 import shutil
 import tempfile
 from pathlib import Path
 
-from .capture import (
-    PortalScreenCast,
-    WfRecorderCapture,
-    is_wayland,
-    pipewire_source_desc,
-    screencast_portal_available,
-    wf_recorder_available,
-    x11_source_desc,
-)
-from .engine import MirrorEngine, gst_element_exists
+from .capture import audio_source_desc, default_monitor_device, h264_encoder_desc
+from .engine import MirrorEngine, gst_element_exists, gst_init
 
 
 class HlsMirrorEngine(MirrorEngine):
     name = "hls"
     display_name = "HLS"
 
-    def __init__(self, receiver, server, config) -> None:  # noqa: ANN001
-        super().__init__(receiver, server, config)
+    def __init__(self, receiver, server, config, on_error=None) -> None:  # noqa: ANN001
+        super().__init__(receiver, server, config, on_error)
         self._pipeline = None
+        self._Gst = None
         self._tmpdir: str | None = None
-        self._portal: PortalScreenCast | None = None
-        self._wf: WfRecorderCapture | None = None
+        self._hls_url: str | None = None
 
     @staticmethod
     def check_available() -> tuple[bool, str]:
-        missing = [e for e in ("x264enc", "h264parse", "hlssink2") if not gst_element_exists(e)]
+        from .capture import available_encoders, capture_available
+
+        missing = [e for e in ("h264parse", "hlssink2") if not gst_element_exists(e)]
         if missing:
-            return False, f"GStreamer-Elemente fehlen: {', '.join(missing)} (gst-plugins-bad/ugly)"
+            return False, f"GStreamer-Elemente fehlen: {', '.join(missing)} (gst-plugins-bad)"
+        if not available_encoders():
+            return False, "Kein H.264-Encoder in GStreamer gefunden (gst-plugins-ugly)"
+        ok, detail = capture_available()
+        if not ok:
+            return False, detail
         return True, "Bereit"
 
-    # -- Start ---------------------------------------------------------------
-    def start(self) -> None:
-        if self._running:
-            return
-        self._tmpdir = tempfile.mkdtemp(prefix="schwupp-hls-")
-        fps = int(self.cfg("mirror_fps"))
-        if not is_wayland():
-            self._launch(x11_source_desc(fps=fps))
-        elif screencast_portal_available():
-            # Asynchroner Portal-Handshake; Pipeline entsteht im Callback.
-            self._portal = PortalScreenCast(fps=fps)
-            self._portal.start(self._on_portal_ready)
-        elif wf_recorder_available():
-            self._wf = WfRecorderCapture(fps=fps)
-            self._launch(self._wf.source_desc())
+    # -- Audiospur ------------------------------------------------------------
+    def _audio_branch(self) -> str:
+        """GStreamer-Zweig für die AAC-Spur (Systemton oder Stille)."""
+        src = audio_source_desc() if self.cfg("mirror_audio") else None
+        if src is not None:
+            device = default_monitor_device()
+            if device and src.startswith("pulsesrc"):
+                src = src.replace("pulsesrc ", f'pulsesrc device="{device}" ', 1)
         else:
-            raise RuntimeError("Kein Wayland-Capture verfügbar "
-                               "(ScreenCast-Portal oder wf-recorder nötig)")
+            src = "audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample"
+        return f"{src} ! avenc_aac ! aacparse ! hls.audio"
 
-    def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
-        if fd is None:
-            # Kein ScreenCast-Portal -> Fallback auf wf-recorder (wlr-screencopy).
-            if wf_recorder_available():
-                print(f"[hls] Portal nicht verfügbar ({node_or_err}); wf-recorder-Fallback")
-                self._wf = WfRecorderCapture(fps=int(self.cfg("mirror_fps")))
-                self._launch(self._wf.source_desc())
-                return
-            print(f"[hls] Bildschirmfreigabe nicht möglich: {node_or_err}")
-            return
-        fps = int(self.cfg("mirror_fps"))
-        self._launch(pipewire_source_desc(fd, node_or_err, fps=fps))
+    # -- Lauf (im Worker-Thread) ---------------------------------------------
+    def run(self, source_desc: str) -> None:
+        Gst = gst_init()
+        self._Gst = Gst
 
-    def _launch(self, source_desc: str) -> None:
-        import gi
-
-        gi.require_version("Gst", "1.0")
-        from gi.repository import Gst
-
-        if not Gst.is_initialized():
-            Gst.init(None)
-
-        bitrate = int(self.cfg("mirror_bitrate_kbps"))
-        fps = int(self.cfg("mirror_fps"))
-        height = int(self.cfg("mirror_height"))
-        width = (height * 16 // 9) // 2 * 2   # 16:9-Zielrahmen (gerade Zahl)
+        self._tmpdir = tempfile.mkdtemp(prefix="schwupp-hls-")
+        width, height, fps, bitrate = self.video_params()
+        encoder = h264_encoder_desc(bitrate, fps, str(self.cfg("mirror_encoder") or "auto"))
         tmp = Path(self._tmpdir)
-        base_url = self.server.set_hls_dir(str(tmp))  # liefert ".../hls/"
+        # URL gezielt für dieses Gerät bilden (richtiges Interface bei VPN/Docker).
+        base_url = self.server.add_hls_dir(str(tmp), client_host=self.receiver.host)
+        self._hls_url = base_url
 
         # Cast-kompatibler HLS-Stack (live getestet am LG-Cast-Receiver):
         #  * 16:9-Rahmen mit add-borders=true -> Seitenverhältnis erhalten (kein Verzerren)
         #  * H.264 constrained-baseline (breiteste Receiver-Kompatibilität)
-        #  * stille AAC-Audiospur (manche Receiver verlangen Audio)
+        #  * AAC-Audiospur (manche Receiver verlangen Audio)
         #  * Master-Playlist mit CODECS (sonst erkennt der Receiver den Stream nicht)
         #  * CORS-Header liefert der Server; Segment-Vorlauf siehe unten
         # Latenz-optimiert: 1-s-Segmente, kurze Playlist, 1 Keyframe/s.
@@ -105,11 +85,9 @@ class HlsMirrorEngine(MirrorEngine):
             f'playlist-root="{base_url}" '
             f"{source_desc} ! videoscale add-borders=true ! videoconvert "
             f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
-            f"! x264enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate} "
-            f"key-int-max={fps} "
+            f"! {encoder} "
             f"! video/x-h264,profile=constrained-baseline ! h264parse ! hls.video "
-            f"audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample "
-            f"! avenc_aac ! aacparse ! hls.audio"
+            f"{self._audio_branch()}"
         )
         self._pipeline = Gst.parse_launch(desc)
 
@@ -118,11 +96,12 @@ class HlsMirrorEngine(MirrorEngine):
         bus.connect("message::error", self._on_error)
 
         self._pipeline.set_state(Gst.State.PLAYING)
-        self._running = True
 
         # Warten, bis Playlist + erste Segmente bereit sind: Cast-Receiver gehen
         # sonst sofort auf IDLE, statt zu puffern.
-        self._wait_for_segments(tmp)
+        if not self._wait_for_segments(tmp):
+            raise RuntimeError("HLS-Segmente wurden nicht erzeugt – "
+                               "Bildschirmaufnahme oder Encoder liefert nichts")
 
         # Master-Playlist mit Codec-Deklaration schreiben (H.264 CBP Lvl 4.0 + AAC-LC)
         (tmp / "master.m3u8").write_text(
@@ -140,7 +119,7 @@ class HlsMirrorEngine(MirrorEngine):
         )
 
     @staticmethod
-    def _wait_for_segments(tmp: Path, min_segments: int = 2, timeout: float = 15.0) -> None:
+    def _wait_for_segments(tmp: Path, min_segments: int = 2, timeout: float = 15.0) -> bool:
         import time
 
         playlist = tmp / "playlist.m3u8"
@@ -148,37 +127,32 @@ class HlsMirrorEngine(MirrorEngine):
         while time.monotonic() < deadline:
             segs = list(tmp.glob("*.ts"))
             if playlist.exists() and len(segs) >= min_segments:
-                return
+                return True
             time.sleep(0.3)
+        return False
 
-    def _on_error(self, bus, message) -> None:  # noqa: ANN001
-        err, dbg = message.parse_error()
-        print(f"[hls] GStreamer-Fehler: {err} – {dbg}")
-        self.stop()
+    def _on_error(self, _bus, message) -> None:  # noqa: ANN001
+        err, _dbg = message.parse_error()
+        self.fail(f"GStreamer-Fehler beim Spiegeln: {err}")
 
     # -- Stop ----------------------------------------------------------------
     def stop(self) -> None:
+        self._running = False
         if self._pipeline is not None:
-            import gi
-
-            gi.require_version("Gst", "1.0")
-            from gi.repository import Gst
-
-            self._pipeline.set_state(Gst.State.NULL)
+            with contextlib.suppress(Exception):
+                self._pipeline.set_state(self._Gst.State.NULL)
             self._pipeline = None
-        if self._wf is not None:
-            self._wf.stop()
-            self._wf = None
+        self._stop_capture()
+        if self._hls_url:
+            self.server.remove_hls_dir(self._hls_url)
+            self._hls_url = None
         # App am TV beenden (-> zurück zum Home), nicht nur die Wiedergabe stoppen.
         # Cast-Geräte via quit_app; andere (AirPlay) über das generische stop().
         try:
             self.receiver.session.quit_app()
         except Exception:  # noqa: BLE001
-            try:
+            with contextlib.suppress(Exception):
                 self.receiver.stop()
-            except Exception:  # noqa: BLE001
-                pass
         if self._tmpdir:
             shutil.rmtree(self._tmpdir, ignore_errors=True)
             self._tmpdir = None
-        self._running = False

@@ -1,8 +1,8 @@
 """Austauschbare Engines fürs Bildschirm-Spiegeln.
 
-* ``native``     – eigenes Cast-Streaming (RTP/Offer-Answer, geringe Latenz)
-* ``hls``        – GStreamer → HLS → Default Media Receiver (robust, träge)
-* ``openscreen`` – externes openscreen ``cast_sender``-Binary
+* ``native``  – eigenes Cast-Streaming (RTP/Offer-Answer, <1 s Latenz, mit Ton)
+* ``hls``     – GStreamer → HLS → Default Media Receiver (robust, träge)
+* ``dlnats``  – endloser MPEG-TS-Live-Stream an DLNA-Renderer
 
 Auswahl über die Einstellungen (siehe :mod:`app.config`).
 """

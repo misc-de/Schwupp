@@ -1,17 +1,27 @@
-"""Schlanker HTTP-Server für lokale Medien und HLS.
+"""Schlanker HTTP-Server für lokale Medien, HLS und Live-Streams.
 
-Ein Chromecast spielt nur Inhalte ab, die er per HTTP von einer im LAN
-erreichbaren Adresse laden kann. Dieser Server:
+Ein Cast-/DLNA-/AirPlay-Gerät spielt nur Inhalte ab, die es per HTTP von einer
+im LAN erreichbaren Adresse laden kann. Dieser Server:
 
 * registriert einzelne lokale Dateien unter ``/file/<token>`` (mit Range-Support,
-  damit das Gerät in MP4-Dateien spulen kann), und
-* liefert ein Verzeichnis unter ``/hls/<datei>`` aus (für die HLS-Mirror-Engine:
-  ``.m3u8``-Playlist + ``.ts``-Segmente).
+  damit das Gerät in MP4-Dateien spulen kann),
+* liefert HLS-Verzeichnisse unter ``/hls/<token>/<datei>`` aus (Playlist +
+  Segmente der HLS-Mirror-Engine) und
+* verteilt endlose Byte-Ströme unter ``/live/<token>`` (MPEG-TS-Mirroring).
+
+Jede Freigabe hat ein eigenes, zufälliges Token und wird wieder **entfernt**,
+sobald sie nicht mehr gebraucht wird – ohne das blieb jede jemals gecastete
+Datei für die restliche Laufzeit der App im LAN abrufbar.
+
+Die Basis-URL wird pro Gerät bestimmt (:func:`app.net.lan_ip` mit dessen IP als
+Routing-Ziel): Bei mehreren Interfaces (WLAN, VPN, Docker-Bridges) oder nach
+einem Netzwechsel zeigt sie sonst auf eine Adresse, die das Gerät nicht erreicht.
 
 Läuft in einem eigenen Thread; threadsicher gegenüber dem GTK-Hauptthread.
 """
 from __future__ import annotations
 
+import contextlib
 import mimetypes
 import os
 import queue
@@ -19,15 +29,24 @@ import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
+
+from ..net import lan_ip
 
 mimetypes.add_type("application/vnd.apple.mpegurl", ".m3u8")
 mimetypes.add_type("video/mp2t", ".ts")
 mimetypes.add_type("video/fmp4", ".m4s")
 
+_CHUNK = 64 * 1024
+
 
 def _guess_mime(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
+
+
+def _token_of(url_or_token: str) -> str:
+    """Extrahiert das Token aus einer vollständigen URL (oder reicht es durch)."""
+    token = url_or_token.rstrip("/").rsplit("/", 1)[-1]
+    return token.split(".", 1)[0]
 
 
 class LiveStream:
@@ -49,11 +68,14 @@ class LiveStream:
             try:
                 q.put_nowait(data)
             except queue.Full:
-                try:
+                with contextlib.suppress(queue.Empty, queue.Full):
                     q.get_nowait()          # ältesten Block verwerfen
                     q.put_nowait(data)
-                except (queue.Empty, queue.Full):
-                    pass
+
+    @property
+    def consumer_count(self) -> int:
+        with self._lock:
+            return len(self._consumers)
 
     def add_consumer(self) -> queue.Queue:
         q: queue.Queue = queue.Queue(maxsize=512)
@@ -71,61 +93,77 @@ class LiveStream:
             consumers = list(self._consumers)
             self._consumers.clear()
         for q in consumers:
-            try:
+            with contextlib.suppress(queue.Full):
                 q.put_nowait(None)          # Sentinel -> Handler beendet
-            except queue.Full:
-                pass
 
 
 class MediaServer:
-    def __init__(self, bind_ip: str, port: int = 0) -> None:
-        self._bind_ip = bind_ip
-        self._files: dict[str, tuple[str, str]] = {}  # token -> (pfad, mime)
-        self._hls_dir: Optional[Path] = None
-        self._live: dict[str, LiveStream] = {}        # token -> Live-Stream
+    def __init__(self, port: int = 0) -> None:
+        self._files: dict[str, tuple[str, str]] = {}   # token -> (pfad, mime)
+        self._hls: dict[str, Path] = {}                # token -> Verzeichnis
+        self._live: dict[str, LiveStream] = {}         # token -> Live-Stream
         self._lock = threading.Lock()
 
         handler = self._make_handler()
-        # bind an "" (alle Interfaces), damit das Gerät uns über die LAN-IP erreicht
+        # bind an "" (alle Interfaces), damit das Gerät uns über die LAN-IP
+        # erreicht – welche das ist, hängt vom Gerät ab (siehe base_url).
         self._httpd = ThreadingHTTPServer(("", port), handler)
         self._httpd.daemon_threads = True
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True,
+                                        name="media-server")
 
     @property
     def port(self) -> int:
         return self._httpd.server_address[1]
 
-    @property
-    def base_url(self) -> str:
-        return f"http://{self._bind_ip}:{self.port}"
+    def base_url(self, client_host: str | None = None) -> str:
+        """Basis-URL, unter der *client_host* diesen Server erreicht.
+
+        Ohne Argument wird die Route Richtung Internet genommen – das ist nur
+        eine Notlösung für Aufrufer ohne bekannte Gegenstelle.
+        """
+        ip = lan_ip(client_host) if client_host else lan_ip()
+        return f"http://{ip}:{self.port}"
 
     # -- Registrierung --------------------------------------------------------
-    def add_file(self, path: str, mime: str | None = None) -> str:
+    def add_file(self, path: str, mime: str | None = None, *,
+                 client_host: str | None = None) -> str:
         """Macht eine lokale Datei abrufbar und liefert ihre vollständige URL."""
         token = secrets.token_urlsafe(12)
         with self._lock:
             self._files[token] = (os.fspath(path), mime or _guess_mime(path))
         ext = Path(path).suffix
-        return f"{self.base_url}/file/{token}{ext}"
+        return f"{self.base_url(client_host)}/file/{token}{ext}"
 
-    def set_hls_dir(self, directory: str) -> str:
-        """Setzt das Verzeichnis, aus dem ``/hls/<datei>`` ausgeliefert wird."""
+    def remove_file(self, url_or_token: str) -> None:
+        """Nimmt eine Datei-Freigabe zurück (nach Ende der Wiedergabe)."""
         with self._lock:
-            self._hls_dir = Path(directory)
-        return f"{self.base_url}/hls/"
+            self._files.pop(_token_of(url_or_token), None)
 
-    def add_live(self, mime: str = "video/mp2t") -> tuple[str, LiveStream]:
+    def add_hls_dir(self, directory: str, *, client_host: str | None = None) -> str:
+        """Gibt ein HLS-Verzeichnis frei und liefert dessen Basis-URL (mit ``/``)."""
+        token = secrets.token_urlsafe(12)
+        with self._lock:
+            self._hls[token] = Path(directory).resolve()
+        return f"{self.base_url(client_host)}/hls/{token}/"
+
+    def remove_hls_dir(self, url_or_token: str) -> None:
+        token = url_or_token.rstrip("/").rsplit("/", 1)[-1]
+        with self._lock:
+            self._hls.pop(token, None)
+
+    def add_live(self, mime: str = "video/mp2t", *,
+                 client_host: str | None = None) -> tuple[str, LiveStream]:
         """Registriert einen Live-Stream und liefert (URL, LiveStream)."""
         token = secrets.token_urlsafe(12)
         ls = LiveStream()
         with self._lock:
             self._live[token] = ls
-        return f"{self.base_url}/live/{token}", ls
+        return f"{self.base_url(client_host)}/live/{token}", ls
 
     def remove_live(self, url_or_token: str) -> None:
-        token = url_or_token.rsplit("/", 1)[-1]
         with self._lock:
-            ls = self._live.pop(token, None)
+            ls = self._live.pop(_token_of(url_or_token), None)
         if ls is not None:
             ls.close()
 
@@ -134,11 +172,38 @@ class MediaServer:
         self._thread.start()
 
     def stop(self) -> None:
+        with self._lock:
+            streams = list(self._live.values())
+            self._live.clear()
+            self._files.clear()
+            self._hls.clear()
+        for ls in streams:
+            ls.close()
         self._httpd.shutdown()
         self._httpd.server_close()
 
+    # -- Nachschlagen (vom Handler genutzt) -----------------------------------
+    def _lookup_file(self, token: str) -> tuple[str, str] | None:
+        with self._lock:
+            return self._files.get(token)
+
+    def _lookup_hls(self, token: str, name: str) -> tuple[str, str] | None:
+        with self._lock:
+            base = self._hls.get(token)
+        if base is None:
+            return None
+        target = (base / os.path.basename(name)).resolve()
+        # Pfad-Traversal verhindern: nur Dateien direkt im freigegebenen Ordner.
+        if target.parent != base or not target.is_file():
+            return None
+        return str(target), _guess_mime(str(target))
+
+    def _lookup_live(self, token: str) -> LiveStream | None:
+        with self._lock:
+            return self._live.get(token)
+
     # -- Handler --------------------------------------------------------------
-    def _make_handler(self):
+    def _make_handler(self):  # noqa: C901 – zählt die eingebettete Handler-Klasse mit
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -147,17 +212,18 @@ class MediaServer:
             def log_message(self, *args) -> None:  # noqa: ANN002
                 pass  # nicht auf stderr spammen
 
+            # -- Routing ---------------------------------------------------
+            def _route(self) -> tuple[str, str]:
+                """(Bereich, Rest) aus dem Pfad, z. B. ("file", "<token>.mp4")."""
+                path = self.path.split("?", 1)[0].lstrip("/")
+                head, _, rest = path.partition("/")
+                return head, rest
+
             def do_HEAD(self) -> None:
-                if self.path.split("?", 1)[0].startswith("/live/"):
-                    self._serve_live(head_only=True)
-                else:
-                    self._serve(head_only=True)
+                self._dispatch(head_only=True)
 
             def do_GET(self) -> None:
-                if self.path.split("?", 1)[0].startswith("/live/"):
-                    self._serve_live(head_only=False)
-                else:
-                    self._serve(head_only=False)
+                self._dispatch(head_only=False)
 
             def do_OPTIONS(self) -> None:
                 # CORS-Preflight (Cast-Receiver laden HLS-Segmente per XHR)
@@ -172,11 +238,25 @@ class MediaServer:
                 self.send_header("Access-Control-Allow-Headers", "*")
                 super().end_headers()
 
+            def _dispatch(self, head_only: bool) -> None:
+                area, rest = self._route()
+                if area == "live":
+                    self._serve_live(rest, head_only)
+                    return
+                entry = None
+                if area == "file":
+                    entry = server._lookup_file(rest.split(".", 1)[0])
+                elif area == "hls":
+                    token, _, name = rest.partition("/")
+                    entry = server._lookup_hls(token, name) if name else None
+                if entry is None:
+                    self.send_error(404)
+                    return
+                self._serve_file(entry, head_only)
+
             # -- Live-Stream (endloser MPEG-TS) -------------------------------
-            def _serve_live(self, head_only: bool) -> None:
-                token = self.path.split("?", 1)[0][len("/live/"):]
-                with server._lock:
-                    ls = server._live.get(token)
+            def _serve_live(self, token: str, head_only: bool) -> None:
+                ls = server._lookup_live(token)
                 if ls is None:
                     self.send_error(404)
                     return
@@ -200,35 +280,24 @@ class MediaServer:
                 finally:
                     ls.remove_consumer(q)
 
-            # -- Routing ------------------------------------------------------
-            def _resolve(self) -> Optional[tuple[str, str]]:
-                """Mappt den Pfad auf (Dateipfad, MIME) oder None (404)."""
-                path = self.path.split("?", 1)[0]
-                if path.startswith("/file/"):
-                    token = path[len("/file/") :].split(".", 1)[0]
-                    with server._lock:
-                        entry = server._files.get(token)
-                    return entry
-                if path.startswith("/hls/"):
-                    with server._lock:
-                        base = server._hls_dir
-                    if base is None:
-                        return None
-                    name = os.path.basename(path[len("/hls/") :])
-                    fp = (base / name).resolve()
-                    # Pfad-Traversal verhindern
-                    if base.resolve() not in fp.parents and fp != base.resolve():
-                        return None
-                    if not fp.is_file():
-                        return None
-                    return (str(fp), _guess_mime(str(fp)))
-                return None
+            # -- Datei (mit Range) --------------------------------------------
+            def _parse_range(self, size: int) -> tuple[int, int, bool] | None:
+                """(start, end, partial) oder None bei unerfüllbarem Range."""
+                rng = self.headers.get("Range")
+                if not rng or not rng.startswith("bytes="):
+                    return 0, size - 1, False
+                spec = rng[len("bytes="):].split(",")[0]
+                s, _, e = spec.partition("-")
+                try:
+                    start = int(s) if s.strip() else 0
+                    end = min(int(e), size - 1) if e.strip() else size - 1
+                except ValueError:
+                    return None
+                if start > end or start >= size:
+                    return None
+                return start, end, True
 
-            def _serve(self, head_only: bool) -> None:
-                entry = self._resolve()
-                if entry is None:
-                    self.send_error(404)
-                    return
+            def _serve_file(self, entry: tuple[str, str], head_only: bool) -> None:
                 fpath, mime = entry
                 try:
                     size = os.path.getsize(fpath)
@@ -236,22 +305,11 @@ class MediaServer:
                     self.send_error(404)
                     return
 
-                # Range-Request (Spulen in MP4) auswerten
-                start, end = 0, size - 1
-                rng = self.headers.get("Range")
-                partial = False
-                if rng and rng.startswith("bytes="):
-                    partial = True
-                    spec = rng[len("bytes=") :].split(",")[0]
-                    s, _, e = spec.partition("-")
-                    if s.strip():
-                        start = int(s)
-                    if e.strip():
-                        end = int(e)
-                    end = min(end, size - 1)
-                    if start > end:
-                        self.send_error(416)
-                        return
+                parsed = self._parse_range(size)
+                if parsed is None:
+                    self.send_error(416)
+                    return
+                start, end, partial = parsed
 
                 length = end - start + 1
                 self.send_response(206 if partial else 200)
@@ -268,7 +326,7 @@ class MediaServer:
                     fh.seek(start)
                     remaining = length
                     while remaining > 0:
-                        chunk = fh.read(min(64 * 1024, remaining))
+                        chunk = fh.read(min(_CHUNK, remaining))
                         if not chunk:
                             break
                         try:

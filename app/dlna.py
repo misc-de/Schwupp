@@ -9,6 +9,7 @@ Wichtig: Progressive MP4s müssen den ``moov``-Atom am Dateianfang haben
 """
 from __future__ import annotations
 
+import contextlib
 import re
 import socket
 import time
@@ -33,7 +34,7 @@ def _ssdp_locations(host: str, st: str, timeout: float = 3.0) -> list[str]:
     while time.time() - t < timeout:
         try:
             data, addr = s.recvfrom(2048)
-        except socket.timeout:
+        except TimeoutError:
             break
         if addr[0] == host:
             m = re.search(r"LOCATION:\s*(\S+)", data.decode(errors="ignore"), re.I)
@@ -115,29 +116,23 @@ class DlnaRenderer:
         )
         time.sleep(0.5)
         # Manche Renderer starten automatisch; Play kann verzögert antworten -> kurz, tolerant.
-        try:
+        with contextlib.suppress(OSError):
             self._soap(
                 "Play",
                 f'<u:Play xmlns:u="{AVTRANSPORT}"><InstanceID>0</InstanceID>'
                 "<Speed>1</Speed></u:Play>",
                 timeout=4,
             )
-        except OSError:
-            pass
 
     def _simple(self, action: str) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._soap(action, f'<u:{action} xmlns:u="{AVTRANSPORT}">'
                                f"<InstanceID>0</InstanceID></u:{action}>", timeout=4)
-        except OSError:
-            pass
 
     def play(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._soap("Play", f'<u:Play xmlns:u="{AVTRANSPORT}"><InstanceID>0</InstanceID>'
                                "<Speed>1</Speed></u:Play>", timeout=4)
-        except OSError:
-            pass
 
     def pause(self) -> None:
         self._simple("Pause")
@@ -150,16 +145,23 @@ class DlnaRenderer:
         if not self._render_control:
             return
         vol = int(max(0.0, min(1.0, level)) * 100)
-        try:
+        with contextlib.suppress(OSError):
             self._soap(
                 "SetVolume",
                 f'<u:SetVolume xmlns:u="{RENDERING}"><InstanceID>0</InstanceID>'
                 f"<Channel>Master</Channel><DesiredVolume>{vol}</DesiredVolume></u:SetVolume>",
                 service=RENDERING, control=self._render_control, timeout=4,
             )
-        except OSError:
-            pass
 
     @property
     def has_volume(self) -> bool:
         return self._render_control is not None
+
+    @property
+    def ready(self) -> bool:
+        """True, sobald eine AVTransport-Control-URL bekannt ist."""
+        return self._control is not None
+
+    def ensure_ready(self) -> bool:
+        """Löst die Control-URL bei Bedarf auf. True, wenn steuerbar."""
+        return self.ready or self.resolve()

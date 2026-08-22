@@ -1,19 +1,29 @@
-"""Bildschirm-Capture als GStreamer-Quelle (X11 und Wayland/Portal).
+"""Bildschirm-Capture als GStreamer-Quelle (X11, Wayland-Portal, wf-recorder).
 
-Liefert für eine Engine den vorderen Teil einer GStreamer-Pipeline, der rohe
-Videoframes vom Bildschirm produziert:
+Liefert einer Engine den vorderen Teil einer GStreamer-Pipeline, der rohe
+Videoframes vom Bildschirm produziert. Drei Wege, in dieser Reihenfolge:
 
-* **X11** (z. B. XFCE): ``ximagesrc`` – einfach und ohne Berechtigungsdialog.
-* **Wayland** (Phosh/FLX1, GNOME, …): ``pipewiresrc`` gefüttert über das
-  ``org.freedesktop.portal.ScreenCast``-Portal. Der Nutzer bestätigt einmalig
-  per Dialog, welcher Bildschirm geteilt wird.
+* **X11** (z. B. XFCE): ``ximagesrc`` – sofort, ohne Berechtigungsdialog.
+* **Wayland/Portal** (GNOME, KDE, Phosh mit xdg-desktop-portal-wlr): PipeWire
+  über ``org.freedesktop.portal.ScreenCast``; der Nutzer bestätigt einmalig.
+* **wf-recorder** (wlroots-Compositoren ohne Portal-Backend, z. B. phoc/FLX1).
 
-Audio (System-Ton mit-casten) ist bewusst noch nicht enthalten – kommt als
-eigener Pfad (pulse/pipewire-Monitor), sobald das Video steht.
+:class:`CaptureSelector` kapselt die Auswahl samt Fallback-Kette, damit alle
+Engines identisch starten und Fehler auf demselben Weg melden (Callback statt
+``print``).
+
+Der Systemton wird über :func:`audio_source_desc` mitgenommen (PipeWire-/Pulse-
+Monitor); Engines, die Audio übertragen können, fragen ihn separat ab.
 """
 from __future__ import annotations
 
+import contextlib
 import os
+import shutil
+import subprocess
+from collections.abc import Callable
+
+from .engine import gst_element_exists
 
 
 def is_wayland() -> bool:
@@ -21,6 +31,87 @@ def is_wayland() -> bool:
         os.environ.get("WAYLAND_DISPLAY")
     )
 
+
+# --- H.264-Encoder-Auswahl ---------------------------------------------------
+# Reihenfolge der Kandidaten. x264enc bleibt bewusst vorn: er ist auf allen
+# getesteten Geräten verifiziert. Die übrigen greifen, wo x264enc fehlt (z. B.
+# eine Runtime ohne gst-plugins-ugly) oder wenn per Config erzwungen.
+_ENCODERS: dict[str, tuple[str, str]] = {
+    # name: (GStreamer-Element, Parameter-Template mit {bitrate_kbps} und {fps})
+    "x264": ("x264enc",
+             "x264enc tune=zerolatency speed-preset=ultrafast "
+             "bitrate={bitrate_kbps} key-int-max={fps}"),
+    "openh264": ("openh264enc",
+                 "openh264enc usage-type=screen complexity=low rate-control=bitrate "
+                 "bitrate={bitrate_bps} gop-size={fps}"),
+    "vaapi": ("vaapih264enc",
+              "vaapih264enc rate-control=cbr bitrate={bitrate_kbps} keyframe-period={fps}"),
+    "v4l2": ("v4l2h264enc",
+             "v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate_bps}\""),
+}
+
+ENCODER_CHOICES = ("auto", *_ENCODERS)
+
+
+def available_encoders() -> list[str]:
+    """Namen der H.264-Encoder, deren GStreamer-Element vorhanden ist."""
+    return [name for name, (element, _) in _ENCODERS.items() if gst_element_exists(element)]
+
+
+def h264_encoder_desc(bitrate_kbps: int, fps: int, preferred: str = "auto") -> str:
+    """GStreamer-Beschreibung des H.264-Encoders (ohne umgebende ``!``).
+
+    *preferred* ist ein Schlüssel aus :data:`ENCODER_CHOICES`; ``auto`` nimmt den
+    ersten verfügbaren aus der Vorzugsreihenfolge. Ein ausdrücklich gewählter,
+    aber nicht (mehr) vorhandener Encoder blockiert die Spiegelung nicht – die
+    Kette läuft dann normal weiter. Wirft nur, wenn es gar keinen gibt.
+    """
+    order = list(_ENCODERS)
+    if preferred in _ENCODERS:
+        order.insert(0, preferred)
+    for name in order:
+        element, template = _ENCODERS[name]
+        if gst_element_exists(element):
+            return template.format(bitrate_kbps=bitrate_kbps,
+                                   bitrate_bps=bitrate_kbps * 1000, fps=fps)
+    raise RuntimeError(
+        "Kein H.264-Encoder gefunden (x264enc, openh264enc, vaapih264enc oder "
+        "v4l2h264enc) – bitte gst-plugins-ugly bzw. gst-plugins-bad installieren"
+    )
+
+
+# --- Systemton ---------------------------------------------------------------
+
+def audio_source_desc() -> str | None:
+    """Quelle für den Systemton (Monitor der Standard-Ausgabe) oder None.
+
+    ``pulsesrc`` mit dem Default-Monitor funktioniert unter PulseAudio *und*
+    PipeWire (dessen Pulse-Kompatibilität) und ist damit der breiteste Weg;
+    ``pipewiresrc`` dient als Rückfall.
+    """
+    if gst_element_exists("pulsesrc"):
+        # Ohne device= nimmt pulsesrc die Default-Quelle (Mikrofon). Der Monitor
+        # der Standard-Senke wird über die Umgebungsvariable gewählt, die
+        # PulseAudio/PipeWire beim Verbinden auflöst.
+        return ("pulsesrc provide-clock=false do-timestamp=true "
+                "! audio/x-raw,channels=2 ! audioconvert ! audioresample")
+    if gst_element_exists("pipewiresrc"):
+        return ("pipewiresrc ! audio/x-raw,channels=2 ! audioconvert ! audioresample")
+    return None
+
+
+def default_monitor_device() -> str | None:
+    """Name des Monitor-Geräts der aktuellen Standard-Ausgabe (für pulsesrc)."""
+    try:
+        out = subprocess.run(["pactl", "get-default-sink"], capture_output=True,
+                             text=True, timeout=3, check=False)
+        sink = out.stdout.strip()
+        return f"{sink}.monitor" if sink else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+# --- Quellbeschreibungen -----------------------------------------------------
 
 def x11_source_desc(fps: int = 30, show_pointer: bool = True) -> str:
     """GStreamer-Quellbeschreibung für X11 (endet mit rohem video/x-raw)."""
@@ -30,6 +121,62 @@ def x11_source_desc(fps: int = 30, show_pointer: bool = True) -> str:
         f"! video/x-raw,framerate={fps}/1 "
         f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
     )
+
+
+def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
+    """GStreamer-Quellbeschreibung für eine Portal-PipeWire-FD."""
+    return (
+        f"pipewiresrc fd={fd} path={node_id} "
+        f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
+    )
+
+
+def x11_capture_available() -> bool:
+    """True, wenn eine X11-Sitzung läuft *und* ximagesrc vorhanden ist.
+
+    Die Element-Prüfung ist wichtig: In der Flatpak-Runtime fehlt ximagesrc,
+    solange das Manifest es nicht mitliefert – dort führt der Portal-Weg.
+    """
+    return not is_wayland() and bool(os.environ.get("DISPLAY")) \
+        and gst_element_exists("ximagesrc")
+
+
+def wf_recorder_available() -> bool:
+    """True, wenn wf-recorder als Wayland-Capture-Fallback nutzbar ist."""
+    return shutil.which("wf-recorder") is not None
+
+
+def screencast_portal_available() -> bool:
+    """True, wenn das D-Bus-ScreenCast-Portal erreichbar ist (sonst -> Fallback)."""
+    try:
+        import gi
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, GLib
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync(
+            "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+            "org.freedesktop.DBus.Properties", "Get",
+            GLib.Variant("(ss)", ("org.freedesktop.portal.ScreenCast", "version")),
+            None, Gio.DBusCallFlags.NONE, 2000, None,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def capture_available() -> tuple[bool, str]:
+    """(nutzbar?, Hinweis) – gibt es überhaupt einen Weg, den Bildschirm zu lesen?"""
+    if x11_capture_available():
+        return True, "X11 (ximagesrc)"
+    if screencast_portal_available():
+        return True, "Wayland (ScreenCast-Portal)"
+    if wf_recorder_available():
+        return True, "Wayland (wf-recorder)"
+    if is_wayland():
+        return False, ("Keine Bildschirmaufnahme möglich: weder ScreenCast-Portal "
+                       "(xdg-desktop-portal-wlr/-gnome) noch wf-recorder gefunden")
+    return False, ("Keine Bildschirmaufnahme möglich: GStreamer-Element ximagesrc "
+                   "fehlt (gst-plugins-good mit X11-Unterstützung)")
 
 
 class PortalScreenCast:
@@ -78,7 +225,7 @@ class PortalScreenCast:
 
     def _on_timeout(self) -> bool:
         self._finish(None, "ScreenCast-Portal antwortet nicht "
-                           "(xdg-desktop-portal-wlr installiert/aktiv?)")
+                           "(xdg-desktop-portal-wlr/-gnome installiert und aktiv?)")
         return False
 
     def _finish(self, fd, info) -> None:  # noqa: ANN001
@@ -200,42 +347,10 @@ class PortalScreenCast:
         self._finish(None, msg)
 
 
-def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
-    """GStreamer-Quellbeschreibung für eine Portal-PipeWire-FD."""
-    return (
-        f"pipewiresrc fd={fd} path={node_id} "
-        f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
-    )
-
-
-def screencast_portal_available() -> bool:
-    """True, wenn das D-Bus-ScreenCast-Portal erreichbar ist (sonst -> Fallback)."""
-    try:
-        import gi
-        gi.require_version("Gio", "2.0")
-        from gi.repository import Gio, GLib
-        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        bus.call_sync(
-            "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
-            "org.freedesktop.DBus.Properties", "Get",
-            GLib.Variant("(ss)", ("org.freedesktop.portal.ScreenCast", "version")),
-            None, Gio.DBusCallFlags.NONE, 2000, None,
-        )
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def wf_recorder_available() -> bool:
-    """True, wenn wf-recorder als Wayland-Capture-Fallback nutzbar ist."""
-    import shutil
-    return shutil.which("wf-recorder") is not None
-
-
 class WfRecorderCapture:
     """Wayland-Capture-Fallback ohne Portal: ``wf-recorder`` (wlr-screencopy).
 
-    Startet wf-recorder, das rohe Frames als Matroska nach stdout schreibt; die
+    Startet wf-recorder, das H.264/MPEG-TS nach stdout schreibt; die
     GStreamer-Quelle liest sie per ``fdsrc``. Für Compositoren wie phoc, wo kein
     ScreenCast-Portal-Backend (xdg-desktop-portal-wlr) verfügbar ist.
     """
@@ -246,9 +361,6 @@ class WfRecorderCapture:
         self._proc = None
 
     def source_desc(self) -> str:
-        import subprocess
-        # H.264/Matroska nach stdout; -y umgeht die interaktive Overwrite-Frage.
-        # GStreamer demuxt + dekodiert -> Rohbild; die Engine kodiert danach selbst.
         # MPEG-TS statt Matroska: streamt live (kein Cluster-Puffern -> kein Ruckeln).
         # -x yuv420p ist nötig (libx264 kommt mit RGB-Default nicht klar);
         # -r erzwingt konstante Framerate.
@@ -280,8 +392,95 @@ class WfRecorderCapture:
                 self._proc.terminate()
                 self._proc.wait(timeout=2)
             except Exception:  # noqa: BLE001
-                try:
+                with contextlib.suppress(Exception):
                     self._proc.kill()
-                except Exception:  # noqa: BLE001
-                    pass
             self._proc = None
+
+
+class CaptureSelector:
+    """Wählt den passenden Capture-Weg und meldet ihn per Callback.
+
+    Alle Engines nutzen dieselbe Kette, damit sich Verhalten und Fehlermeldungen
+    nicht je Engine unterscheiden:
+
+    1. **X11 + ximagesrc** – sofort verfügbar, kein Dialog.
+    2. **ScreenCast-Portal** – asynchron (Nutzerdialog); scheitert es, wird
+       automatisch auf wf-recorder zurückgefallen.
+    3. **wf-recorder** – letzter Ausweg für wlroots ohne Portal-Backend.
+
+    ``start`` kehrt sofort zurück; genau einer der beiden Callbacks wird
+    aufgerufen – ``on_ready(source_desc)`` oder ``on_error(text)``.
+    """
+
+    def __init__(self, fps: int = 30) -> None:
+        self.fps = fps
+        self._wf: WfRecorderCapture | None = None
+        self._portal: PortalScreenCast | None = None
+        self._cancelled = False
+        self._kind: str | None = None       # "x11" | "portal" | "wf"
+        self._last_kind: str | None = None  # tatsächlich gelieferter Weg
+
+    def start(self, on_ready: Callable[[str], None],
+              on_error: Callable[[str], None]) -> None:
+        self._on_ready, self._on_error = on_ready, on_error
+        if x11_capture_available():
+            self._kind = "x11"
+            self._deliver(x11_source_desc(fps=self.fps))
+            return
+        if screencast_portal_available():
+            self._kind = "portal"
+            self._portal = PortalScreenCast(fps=self.fps)
+            self._portal.start(self._on_portal_ready)
+            return
+        self._try_wf_recorder()
+
+    def _on_portal_ready(self, fd, node_or_err) -> None:  # noqa: ANN001
+        if self._cancelled:
+            return  # bereits gestoppt, während der Portal-Dialog lief
+        if fd is None:
+            # Kein/abgelehntes Portal -> letzter Versuch über wlr-screencopy.
+            if wf_recorder_available():
+                self._try_wf_recorder()
+            else:
+                self._on_error(f"Bildschirmfreigabe nicht möglich: {node_or_err}")
+            return
+        self._deliver(pipewire_source_desc(fd, node_or_err, self.fps))
+
+    def _try_wf_recorder(self) -> None:
+        if not wf_recorder_available():
+            ok, detail = capture_available()
+            self._on_error(detail)
+            return
+        try:
+            self._kind = "wf"
+            self._wf = WfRecorderCapture(fps=self.fps)
+            self._deliver(self._wf.source_desc())
+        except OSError as exc:
+            self._on_error(f"wf-recorder konnte nicht gestartet werden: {exc}")
+
+    def _deliver(self, desc: str) -> None:
+        self._last_kind = self._kind
+        if not self._cancelled:
+            self._on_ready(desc)
+
+    def restart_sync(self) -> str | None:
+        """Baut dieselbe Quelle synchron neu auf (für die Auto-Recovery).
+
+        Nur für Wege möglich, die ohne Nutzerdialog auskommen (X11, wf-recorder).
+        Beim Portal-Weg ist eine erneute Aushandlung nötig -> ``None``.
+        """
+        if self._last_kind == "x11":
+            return x11_source_desc(fps=self.fps)
+        if self._last_kind == "wf":
+            if self._wf is not None:
+                self._wf.stop()
+            self._wf = WfRecorderCapture(fps=self.fps)
+            return self._wf.source_desc()
+        return None
+
+    def stop(self) -> None:
+        """Beendet einen laufenden Hilfsprozess und verhindert späte Callbacks."""
+        self._cancelled = True
+        if self._wf is not None:
+            self._wf.stop()
+            self._wf = None

@@ -1,30 +1,31 @@
 """Leichtgewichtige Internationalisierung.
 
-Übersetzungen liegen als flache ``{key: text}``-JSON-Dateien unter ``lang/<code>.json``
-im Projekt-Root. Englisch (``en``) ist die Quellsprache und der Fallback: Wird die
-Systemsprache nicht unterstützt (oder fehlt ein Schlüssel), greift Englisch.
+Übersetzungen liegen als flache ``{key: text}``-JSON-Dateien unter ``lang/<code>.json``.
+Wo dieses Verzeichnis liegt, klärt :mod:`app.paths` (Git-Klon, Flatpak, pip).
+Englisch (``en``) ist die Quellsprache und der Fallback: Wird die Systemsprache
+nicht unterstützt (oder fehlt ein Schlüssel), greift Englisch.
 
 Sprachwahl: ``SCHWUPP_LANG`` > ``LC_ALL`` > ``LC_MESSAGES`` > ``LANG`` > locale.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import locale
 import os
-from pathlib import Path
+
+from .paths import data_file
 
 SOURCE_LANGUAGE = "en"
-_LANG_DIR = Path(__file__).resolve().parent.parent / "lang"
+_LANG_DIR = data_file("lang")
 
 
 def _load() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     if _LANG_DIR.exists():
         for f in _LANG_DIR.glob("*.json"):
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 out[f.stem] = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
     out.setdefault(SOURCE_LANGUAGE, {})
     return out
 

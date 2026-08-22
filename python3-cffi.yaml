@@ -1,0 +1,20 @@
+# Generated with flatpak-pip-generator --runtime=org.gnome.Sdk//49 --requirements-file=.flathub-tools/req-cffi.txt --output python3-cffi --yaml --prefer-wheels cffi
+name: python3-cffi
+buildsystem: simple
+build-commands:
+  - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+    --prefix=${FLATPAK_DEST} "cffi>=1.16" --no-build-isolation
+sources:
+  - type: file
+    url: https://files.pythonhosted.org/packages/95/95/86342356ff5953b3fb06f7ef7c5bee212d45e770abc7218d451b9148313c/cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+    sha256: a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2
+    only-arches:
+      - x86_64
+  - type: file
+    url: https://files.pythonhosted.org/packages/37/6f/3b5ce4c3b2192d250f04908f2bfd91ef34552ec8f7716a5d4abdb8d67bb2/cffi-2.1.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
+    sha256: f16c709686a78c727bbbf059f92b0bf41c6fc60deec706d2dc19f529175a6125
+    only-arches:
+      - aarch64
+  - type: file
+    url: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
+    sha256: b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992

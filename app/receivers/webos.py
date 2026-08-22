@@ -11,6 +11,8 @@ abgelegt, danach verbindet sich die App ohne Rückfrage.
 """
 from __future__ import annotations
 
+import contextlib
+
 from ..dlna import DlnaRenderer
 from .base import Feature, Receiver
 
@@ -44,8 +46,7 @@ class WebosReceiver(Receiver):
     # -- Verbindung -----------------------------------------------------------
     def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
         from pywebostv.connection import WebOSClient
-        from pywebostv.controls import (ApplicationControl, MediaControl,
-                                        SystemControl)
+        from pywebostv.controls import ApplicationControl, MediaControl, SystemControl
 
         keys = self.context.config["webos_keys"] or {}
         store = {"client_key": keys[self.host]} if self.host in keys else {}
@@ -75,8 +76,7 @@ class WebosReceiver(Receiver):
 
     # -- Inhalte --------------------------------------------------------------
     def play_media(self, url, mime, *, title=None, live=False) -> None:  # noqa: ANN001
-        if self._dlna._control is None:
-            self._dlna.resolve()
+        self._dlna.ensure_ready()
         self._dlna.play_url(url, mime, title or "Schwupp")
 
     def play_youtube(self, video_id: str) -> None:
@@ -97,10 +97,8 @@ class WebosReceiver(Receiver):
 
     def stop(self) -> None:
         if self._media:
-            try:
+            with contextlib.suppress(Exception):
                 self._media.stop()
-            except Exception:  # noqa: BLE001
-                pass
         self._dlna.stop()
 
     def set_volume(self, level: float) -> None:
@@ -113,7 +111,5 @@ class WebosReceiver(Receiver):
     def notify(self, text: str) -> None:
         """Kleine Bildschirm-Nachricht am TV (für Status/Hinweise)."""
         if self._sys:
-            try:
+            with contextlib.suppress(Exception):
                 self._sys.notify(text)
-            except Exception:  # noqa: BLE001
-                pass

@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 def frame_nonce(frame_id: int, iv_mask: bytes) -> bytes:
     nonce = bytearray(16)
     nonce[8:12] = (frame_id & 0xFFFFFFFF).to_bytes(4, "big")
-    return bytes(n ^ m for n, m in zip(nonce, iv_mask))
+    return bytes(n ^ m for n, m in zip(nonce, iv_mask, strict=False))
 
 
 def encrypt_frame(data: bytes, frame_id: int, key: bytes, iv_mask: bytes) -> bytes:

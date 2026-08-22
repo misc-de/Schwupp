@@ -2,17 +2,17 @@
 
 * **Erforderlich** (ohne sie startet die App nicht): PyGObject/GTK4/libadwaita
   und pychromecast (Discovery + Cast-Kern).
-* **Optional** (App startet, betroffene Funktion fehlt): GStreamer + x264enc
-  (Spiegeln), cryptography (nativer Mirror), pywebostv (LG webOS), requests
-  (Selbst-Updater), yt-dlp (Web-Video-Extraktion).
+* **Optional** (App startet, betroffene Funktion fehlt): GStreamer + ein
+  H.264-Encoder (Spiegeln), cryptography (nativer Mirror), pywebostv (LG webOS),
+  pyatv (AirPlay), requests (Selbst-Updater), yt-dlp (Web-Video-Extraktion).
 """
 from __future__ import annotations
 
 import importlib
 import importlib.util
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,12 @@ def _gst(element: str) -> Callable[[], bool]:
     return chk
 
 
+def _any_h264_encoder() -> bool:
+    """Irgendein H.264-Encoder (x264enc, openh264enc, vaapih264enc, v4l2h264enc)."""
+    from .mirror.capture import available_encoders
+    return bool(available_encoders())
+
+
 def _cli(name: str) -> Callable[[], bool]:
     return lambda: shutil.which(name) is not None
 
@@ -60,7 +66,8 @@ REQUIRED: list[Dep] = [
 
 OPTIONAL: list[Dep] = [
     Dep("GStreamer (gst-plugins-base/good)", "deps.feat.mirror", _gi("Gst", "1.0")),
-    Dep("x264enc (gst-plugins-ugly)", "deps.feat.mirror", _gst("x264enc")),
+    Dep("H.264-Encoder (gst-plugins-ugly: x264enc)", "deps.feat.mirror",
+        _any_h264_encoder),
     Dep("cryptography", "deps.feat.native", _mod("cryptography")),
     Dep("pywebostv", "deps.feat.webos", _mod("pywebostv")),
     Dep("pyatv", "deps.feat.airplay", _mod("pyatv")),

@@ -8,19 +8,21 @@ from typing import Any
 
 _DEFAULTS: dict[str, Any] = {
     # Welche Engine fürs Bildschirm-Spiegeln genutzt wird:
-    #   "native"     – eigenes Cast-Streaming (RTP, geringe Latenz) [Ziel]
-    #   "hls"        – GStreamer -> HLS -> Default Media Receiver (robust, träge)
-    #   "openscreen" – externes openscreen cast_sender-Binary
-    # "native" = echtes Cast-Streaming (<1 s, live bestätigt); "hls" = robuster
-    # Fallback (~7 s). "dlnats"/"openscreen" sind weitere Alternativen.
+    #   "native" – eigenes Cast-Streaming (<1 s, live bestätigt) [Standard]
+    #   "hls"    – GStreamer -> HLS -> Default Media Receiver (robust, ~7 s)
+    #   "dlnats" – endloser MPEG-TS an DLNA-Renderer (~1–3 s, gerätabhängig)
     "mirror_engine": "native",
     # Video-Parameter fürs Spiegeln
     "mirror_bitrate_kbps": 6000,
     "mirror_fps": 30,
     "mirror_height": 1080,   # 16:9-Zielhöhe (Breite wird daraus berechnet)
     "mirror_target_delay_ms": 150,  # Playout-Puffer am Receiver (native Engine)
-    # Pfad zum openscreen cast_sender-Binary (nur für Engine "openscreen")
-    "openscreen_sender_path": "",
+    # Systemton mitspiegeln (Monitor der Standard-Ausgabe). Fehlt die Quelle
+    # oder lehnt der Receiver den Audio-Stream ab, läuft das Bild trotzdem.
+    "mirror_audio": True,
+    # H.264-Encoder: "auto" nimmt den ersten verfügbaren (x264enc bevorzugt),
+    # sonst "x264" | "openh264" | "vaapi" | "v4l2" erzwingen.
+    "mirror_encoder": "auto",
     # Zuletzt genutztes Gerät (UUID) – für Auto-Reconnect-Komfort
     "last_device_uuid": "",
     # Zeitpunkt der letzten Update-Prüfung (ISO-String, vom Updater gesetzt)
@@ -37,7 +39,7 @@ _DEFAULTS: dict[str, Any] = {
 # Diese Schlüssel sind pro Gerät überschreibbar; sonst gilt der globale Default.
 DEVICE_KEYS = (
     "mirror_engine", "mirror_bitrate_kbps", "mirror_fps",
-    "mirror_height", "mirror_target_delay_ms",
+    "mirror_height", "mirror_target_delay_ms", "mirror_audio", "mirror_encoder",
 )
 
 

@@ -36,8 +36,9 @@ the fallback for unsupported locales).
 | YouTube | ✅ | ✅ | ✅ (as video stream) |
 | Web videos | ✅ | ✅ | ✅ |
 | Play / pause / stop, volume | ✅ | ✅ | stop (play/pause device-dependent) |
-| Screen mirroring (native) | ✅ | ✅ | — |
+| Screen mirroring (native, < 1 s) | ✅ | ✅ | — |
 | Screen mirroring (HLS) | ✅ | ✅ | ✅ |
+| Sound while mirroring | ✅ | ✅ | ✅ |
 
 Most TVs are found and connected automatically. Newer LG webOS TVs (≈2024 and later)
 work just like a Chromecast, including screen mirroring.
@@ -61,76 +62,61 @@ Mirror your desktop to the TV. (Curious how it works? See
 
 ```
 app/
-  discovery.py     unified discovery (Chromecast + LG via zeroconf)
+  discovery.py     unified discovery (Cast, webOS, AirPlay, DLNA)
   receivers/       device backends behind one interface:
     base.py          Receiver interface + feature gating
     chromecast.py    pychromecast
     webos.py         pywebostv (control/YouTube) + DLNA (media)
     airplay.py       pyatv (AirPlay 2: PIN pairing + play_url)
-  dlna.py          minimal UPnP-AVTransport client (webOS media)
+    dlna.py          generic UPnP media renderers
+  dlna.py          minimal UPnP-AVTransport client
   server/          local HTTP server (files w/ Range, HLS, live stream)
   sources/         YouTube / web video (yt-dlp)
-  mirror/          pluggable mirror engines (native, hls, dlnats, openscreen)
-  updater.py       self-update (git pull or GitHub ZIP)
+  mirror/          pluggable mirror engines (native, hls, dlnats)
+  paths.py         locates VERSION/lang (git checkout, prefix, Flatpak)
+  updater.py       self-update (git pull or verified ZIP staging)
   ui/              GTK4/libadwaita interface (adaptive desktop/phone)
+tests/             protocol, server and config tests — no TV required
 ```
 
 The GUI only talks to the `Receiver` interface; which actions appear is driven by
-`receiver.supports(...)`.
+`receiver.supports(...)`. Mirror engines share one base class that handles screen
+capture selection, the worker thread and error reporting back into the window.
 
 ## Installation
 
-### 1. Install the system libraries
+### Flatpak (recommended)
 
-**Arch / Manjaro:**
-
-```bash
-sudo pacman -S python gtk4 libadwaita gobject-introspection \
-    gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
-```
-
-**Debian / Ubuntu** (and derivatives):
+Pre-built, **GPG-signed** bundle for **x86_64 and aarch64** — ideal for the
+phone, no build tools needed:
 
 ```bash
-sudo apt install python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
-    gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly gstreamer1.0-libav
+flatpak remote-add --if-not-exists schwupp https://misc-de.github.io/Schwupp/de.cais.Schwupp.flatpakrepo
+flatpak install schwupp de.cais.Schwupp
+flatpak run de.cais.Schwupp
 ```
 
-**Fedora / CentOS / RHEL** (dnf):
+Update later with `flatpak update de.cais.Schwupp`. The signing key is already
+embedded in the `.flatpakrepo` file — nothing needs to be imported separately.
 
-```bash
-sudo dnf install python3 python3-gobject gtk4 libadwaita \
-    gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free \
-    gstreamer1-plugins-ugly gstreamer1-libav
-```
+The Flatpak brings everything along, including the X11 screen capture element
+and `wf-recorder` for wlroots compositors without a screen-cast portal.
 
-> On CentOS/RHEL enable **EPEL** (and **RPM Fusion** for `gstreamer1-plugins-ugly` /
-> `gstreamer1-libav`, which carry patent-encumbered codecs).
+> Prefer to run it from a Git checkout, or compile it yourself? See
+> [Building from source &amp; project layout](BUILDING.md).
 
-The Python dependencies (including `yt-dlp`) are installed into the venv in the next
-step — no extra system package needed.
-
-### 2. Download Schwupp and set up its Python environment
+### From a Git checkout
 
 ```bash
 git clone https://github.com/misc-de/Schwupp.git
 cd Schwupp
-python -m venv --system-site-packages .venv
-.venv/bin/pip install -r requirements.txt
+make venv     # Python environment (uses the system GTK4/GStreamer)
+make run
 ```
 
-### 3. Add Schwupp to your system (app icon + menu entry)
-
-From inside the cloned `Schwupp` folder:
-
-```bash
-./installation.sh            # icon + menu entry in ~/.local (no sudo)
-./installation.sh --uninstall   # remove again
-```
-
-Afterwards **Schwupp** appears in your app menu and launches like any other desktop
-app — no terminal needed.
+The system libraries needed for this route are listed in
+[BUILDING.md](BUILDING.md#voraussetzungen). To get an app icon and menu entry,
+run `make install PREFIX=$HOME/.local` (no root needed).
 
 ## First use
 
@@ -146,8 +132,12 @@ lets you continue anyway.
 
 ## Updates
 
-Go to **Settings → App → "Check for updates"**. Schwupp checks for a newer version and
-updates itself in place — your settings are kept — and then offers to restart.
+Installed as a Flatpak: `flatpak update de.cais.Schwupp` (the settings page says
+so as well).
+
+Running from a Git checkout: go to **Settings → App → "Check for updates"**.
+Schwupp checks for a newer version and updates itself in place — your settings
+are kept — and then offers to restart.
 
 ## Credits
 

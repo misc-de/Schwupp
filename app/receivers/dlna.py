@@ -11,6 +11,8 @@ Die Control-URL ist beim Verbinden meist schon aus der Discovery bekannt
 """
 from __future__ import annotations
 
+import contextlib
+
 from ..dlna import DlnaRenderer
 from .base import Feature, Receiver
 
@@ -27,20 +29,16 @@ class DlnaReceiver(Receiver):
 
     # -- Verbindung -----------------------------------------------------------
     def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
-        if self._dlna._control is None:
-            if not self._dlna.resolve():
-                raise RuntimeError("Kein DLNA-AVTransport am Gerät gefunden")
+        if not self._dlna.ensure_ready():
+            raise RuntimeError("Kein DLNA-AVTransport am Gerät gefunden")
 
     def disconnect(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._dlna.stop()
-        except Exception:  # noqa: BLE001
-            pass
 
     # -- Inhalte --------------------------------------------------------------
     def play_media(self, url, mime, *, title=None, live=False) -> None:  # noqa: ANN001
-        if self._dlna._control is None:
-            self._dlna.resolve()
+        self._dlna.ensure_ready()
         self._dlna.play_url(url, mime, title or "Schwupp")
 
     # -- Steuerung ------------------------------------------------------------

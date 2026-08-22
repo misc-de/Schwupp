@@ -6,7 +6,7 @@ und müssen von der UI per ``GLib.idle_add`` gemarshallt werden.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import pychromecast
 from pychromecast.controllers.media import MediaStatusListener
@@ -45,7 +45,7 @@ class CastSession:
         self._port = port
         self._name = name
         self._model = model
-        self._cc: Optional[pychromecast.Chromecast] = None
+        self._cc: pychromecast.Chromecast | None = None
 
     # -- Verbindung -----------------------------------------------------------
     def connect(self, timeout: float = 10.0) -> None:

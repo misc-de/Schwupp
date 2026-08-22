@@ -18,17 +18,23 @@ import socket
 import threading
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 from uuid import UUID
 
 import zeroconf
-from zeroconf import IPVersion, ServiceStateChange
 from pychromecast.discovery import CastBrowser, SimpleCastListener
 from pychromecast.models import CastInfo
+from zeroconf import IPVersion, ServiceStateChange
 
 AIRPLAY_SERVICE = "_airplay._tcp.local."
 DLNA_RENDERER_ST = "urn:schemas-upnp-org:device:MediaRenderer:1"
+
+# Wartezeiten zwischen den SSDP-Runden (Sekunden). Anfangs eng, damit die Liste
+# schnell steht, danach sparsam – auf dem Telefon ist jeder Broadcast Akkulast.
+DLNA_INTERVALS = (5, 10, 20, 60)
+# So oft darf ein DLNA-Gerät schweigen, bevor es aus der Liste fliegt.
+DLNA_MISSES_UNTIL_GONE = 3
 
 # Backend-Vorrang bei gleichem Host: Cast > webOS > AirPlay > DLNA
 # (mehr Funktionen gewinnt; AirPlay schlägt DLNA wegen HLS-Spiegelung)
@@ -56,7 +62,7 @@ def _ssdp_search(st: str, timeout: float = 3.0) -> dict[str, str]:
         while time.time() - t < timeout:
             try:
                 data, addr = s.recvfrom(4096)
-            except socket.timeout:
+            except TimeoutError:
                 break
             m = re.search(rb"LOCATION:\s*(\S+)", data, re.I)
             if m:
@@ -94,9 +100,9 @@ def _is_cast_receiver(host: str, port: int = 8009, timeout: float = 1.5) -> bool
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     try:
-        with socket.create_connection((host, port), timeout=timeout) as raw:
-            with ctx.wrap_socket(raw, server_hostname=host) as s:
-                return s.getpeercert(binary_form=True) is not None
+        with socket.create_connection((host, port), timeout=timeout) as raw, \
+                ctx.wrap_socket(raw, server_hostname=host) as s:
+            return s.getpeercert(binary_form=True) is not None
     except OSError:
         return False
 
@@ -127,9 +133,13 @@ class Discovery:
         self._lock = threading.Lock()
         self._dlna_stop = threading.Event()
         self._dlna_thread: threading.Thread | None = None
+        # mDNS-Servicename -> uuid, damit ein "Removed" den Eintrag findet
+        self._airplay_by_service: dict[str, str] = {}
+        # DLNA hat kein Removal-Signal: zählt, wie viele Scans ein Host schweigt
+        self._dlna_misses: dict[str, int] = {}
 
     # -- Dedup über Host (ein TV kann via _googlecast UND _airplay/8009 auftauchen) --
-    def _emit_add(self, info: "ReceiverInfo") -> None:
+    def _emit_add(self, info: ReceiverInfo) -> None:
         old_uuid = None
         with self._lock:
             prev = self._by_host.get(info.host)
@@ -185,12 +195,20 @@ class Discovery:
 
     # -- DLNA / UPnP (SSDP-Polling: Samsung, Sony, Panasonic, Philips, Hisense …) --
     def _dlna_loop(self) -> None:
-        # DLNA hat kein mDNS-Push -> periodisch per SSDP scannen.
+        """Sucht DLNA-Renderer per SSDP (die haben kein mDNS-Push).
+
+        Das Intervall wächst nach den ersten Runden von 10 auf 60 s: Direkt nach
+        dem Start soll die Geräteliste schnell stehen, danach ist ein Broadcast
+        alle paar Sekunden auf einem Telefon nur Funk- und Akkulast.
+        """
+        round_no = 0
         while not self._dlna_stop.is_set():
+            seen: set[str] = set()
             try:
                 for host, loc in _ssdp_search(DLNA_RENDERER_ST).items():
                     if self._dlna_stop.is_set():
                         break
+                    seen.add(host)
                     with self._lock:
                         prev = self._by_host.get(host)
                     # Host schon als höherwertiges Backend bekannt? -> Beschreibung sparen
@@ -204,9 +222,29 @@ class Discovery:
                         kind="dlna", uuid=f"dlna:{host}", name=name,
                         host=host, port=0, model=model, raw=control,
                     ))
+                self._expire_dlna(seen)
             except Exception:  # noqa: BLE001
                 pass
-            self._dlna_stop.wait(25)  # alle 25 s erneut suchen
+            round_no += 1
+            self._dlna_stop.wait(DLNA_INTERVALS[min(round_no, len(DLNA_INTERVALS) - 1)])
+
+    def _expire_dlna(self, seen: set[str]) -> None:
+        """Entfernt DLNA-Geräte, die mehrere Scans in Folge nicht geantwortet haben.
+
+        Ein ausgeschalteter TV blieb sonst dauerhaft in der Liste stehen – der
+        Verbindungsversuch lief dann in einen Timeout.
+        """
+        with self._lock:
+            stale = [inf for host, inf in self._by_host.items()
+                     if inf.kind == "dlna" and host not in seen]
+        for inf in stale:
+            misses = self._dlna_misses.get(inf.host, 0) + 1
+            self._dlna_misses[inf.host] = misses
+            if misses >= DLNA_MISSES_UNTIL_GONE:
+                self._dlna_misses.pop(inf.host, None)
+                self._emit_remove(inf.uuid)
+        for host in seen:
+            self._dlna_misses.pop(host, None)
 
     # -- Chromecast -----------------------------------------------------------
     def _cast_added(self, uuid: UUID, service: str) -> None:
@@ -224,7 +262,16 @@ class Discovery:
     # -- AirPlay-Announcements (LG webOS + generische AirPlay-2-TVs) -----------
     def _airplay_change(self, zeroconf, service_type, name, state_change) -> None:  # noqa: ANN001
         if state_change is ServiceStateChange.Removed:
-            return  # Host-Dedup hält den Eintrag; Cast-Remove räumt ihn ab
+            # Gerät ist aus dem Netz verschwunden (TV aus). Nur entfernen, wenn
+            # der Eintrag noch der von uns gemeldete ist – ein zwischenzeitlich
+            # höherwertig erkanntes Backend (Cast) bleibt bestehen.
+            uuid = self._airplay_by_service.pop(name, None)
+            if uuid:
+                with self._lock:
+                    current = next((i for i in self._by_host.values() if i.uuid == uuid), None)
+                if current is not None:
+                    self._emit_remove(uuid)
+            return
         info = zeroconf.get_service_info(service_type, name, timeout=3000)
         if info is None:
             return
@@ -240,6 +287,7 @@ class Discovery:
         # Hat das Gerät zusätzlich einen Cast-Receiver (Android/Google-TV), kommt
         # der über _googlecast bzw. Host-Dedup ohnehin mit höherem Vorrang.
         if props.get("manufacturer", "").upper() != "LG":
+            self._airplay_by_service[name] = f"airplay:{host}"
             self._emit_add(ReceiverInfo(
                 kind="airplay", uuid=f"airplay:{host}", name=friendly,
                 host=host, port=info.port or 7000, model=model, raw=None,
@@ -248,11 +296,13 @@ class Discovery:
         # Viele LG-TVs haben einen versteckten Cast-Receiver auf 8009 (ohne
         # _googlecast-mDNS). Cast bietet Media + YouTube + HLS-Mirror -> bevorzugen.
         if _is_cast_receiver(host):
+            self._airplay_by_service[name] = f"cast:{host}"
             self._emit_add(ReceiverInfo(
                 kind="chromecast", uuid=f"cast:{host}", name=friendly,
                 host=host, port=8009, model=model, raw=None,
             ))
         else:
+            self._airplay_by_service[name] = f"webos:{host}"
             self._emit_add(ReceiverInfo(
                 kind="webos", uuid=f"webos:{host}", name=friendly,
                 host=host, port=3001, model=model, raw=None,

@@ -14,6 +14,7 @@ Event-Loop-Thread und marshallt per ``run_coroutine_threadsafe``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 
 from .base import Feature, Receiver
@@ -147,10 +148,8 @@ class AirplayReceiver(Receiver):
             self._store_creds(creds)
             return creds
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 self._run(pairing.close(), 10)
-            except Exception:  # noqa: BLE001
-                pass
 
     def disconnect(self) -> None:
         atv, self._atv = self._atv, None
@@ -159,11 +158,9 @@ class AirplayReceiver(Receiver):
         if loop is None:
             return
         if atv is not None:
-            try:
+            with contextlib.suppress(Exception):
                 asyncio.run_coroutine_threadsafe(
                     self._close_atv(atv), loop).result(5)
-            except Exception:  # noqa: BLE001
-                pass
         loop.call_soon_threadsafe(loop.stop)
         if thread is not None:
             thread.join(timeout=5)
@@ -183,10 +180,9 @@ class AirplayReceiver(Receiver):
     def _remote(self, action: str) -> None:
         if self._atv is None:
             return
-        try:
+        # z. B. NotSupportedError – manche Geräte können nur Wiedergabe
+        with contextlib.suppress(Exception):
             self._run(getattr(self._atv.remote_control, action)(), 10)
-        except Exception:  # noqa: BLE001
-            pass  # z. B. NotSupportedError – Gerät kann nur Wiedergabe
 
     def play(self) -> None:
         self._remote("play")
@@ -202,11 +198,9 @@ class AirplayReceiver(Receiver):
         self._remote("stop")
         if self._atv is not None and self._loop is not None:
             atv, self._atv = self._atv, None
-            try:
+            with contextlib.suppress(Exception):
                 asyncio.run_coroutine_threadsafe(
                     self._close_atv(atv), self._loop).result(5)
-            except Exception:  # noqa: BLE001
-                pass
 
     def supports(self, feature: str) -> bool:
         return feature in _FEATURES

@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    name: Tests & Linter
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Die Tests kommen bewusst ohne GTK/GStreamer aus (reine Protokoll-,
+      # Server- und Konfigurationslogik), deshalb reicht hier plain Python.
+      - name: Install test dependencies
+        run: pip install pytest ruff
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Tests (pytest)
+        run: python -m pytest
+
+  metadata:
+    name: AppStream, desktop & translations
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends appstream desktop-file-utils
+
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --no-net data/de.cais.Schwupp.metainfo.xml
+
+      - name: Validate desktop entry
+        run: desktop-file-validate data/de.cais.Schwupp.desktop
+
+      - name: Translation catalogs match
+        run: |
+          python - <<'PY'
+          import json, sys
+          de = set(json.load(open("lang/de.json")))
+          en = set(json.load(open("lang/en.json")))
+          if de ^ en:
+              sys.exit(f"Sprachdateien weichen ab: {sorted(de ^ en)}")
+          print(f"{len(en)} Schlüssel in beiden Katalogen")
+          PY
+
+  flatpak:
+    name: Flatpak build (x86_64)
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: schwupp.flatpak
+          manifest-path: de.cais.Schwupp.yaml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+  # Auf einem Release-Tag (v*) müssen Tag, VERSION-Datei und das oberste
+  # <release> der Metainfo übereinstimmen – sonst wäre der Release inkonsistent
+  # und der Selbst-Updater würde eine falsche Version melden.
+  release-consistency:
+    name: Release version consistency
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag == VERSION == metainfo
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file_ver=$(cat VERSION)
+          meta_ver=$(grep -m1 -oE 'release version="[0-9]+\.[0-9]+\.[0-9]+"' \
+            data/de.cais.Schwupp.metainfo.xml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "tag=$tag  VERSION=$file_ver  metainfo=$meta_ver"
+          fail=0
+          [ "$tag" = "$file_ver" ] || { echo "::error::VERSION ($file_ver) != tag ($tag)"; fail=1; }
+          [ "$tag" = "$meta_ver" ] || { echo "::error::newest metainfo release ($meta_ver) != tag ($tag)"; fail=1; }
+          exit $fail

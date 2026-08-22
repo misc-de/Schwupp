@@ -6,3 +6,18 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# Flatpak: lokale Build-Verzeichnisse und das gehostete OSTree-Repo
+/.flatpak-builder
+/.flatpak-build
+/build-dir
+/repo
+/repo-*
+/*.flatpak
+# Hilfswerkzeug für python3-modules.yaml (venv + Generator); das erzeugte
+# python3-modules.yaml wird bewusst eingecheckt (Offline-Build).
+/.flathub-tools
+
+# Testartefakte
+.pytest_cache/
+.ruff_cache/

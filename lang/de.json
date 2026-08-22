@@ -1,8 +1,6 @@
 {
   "language.name": "Deutsch",
-
   "common.error": "Fehler",
-
   "deps.feat.gui": "grafische Oberfläche",
   "deps.feat.cast": "Geräte-Erkennung & Casten",
   "deps.feat.mirror": "Bildschirmspiegelung",
@@ -17,17 +15,14 @@
   "deps.optional.body": "Diese optionalen Komponenten fehlen — die zugehörigen Funktionen sind deaktiviert:\n\n{list}\n\nSchwupp trotzdem starten?",
   "deps.optional.start": "Trotzdem starten",
   "deps.quit": "Beenden",
-
   "window.settings": "Einstellungen",
   "window.devices_found": "Gefundene Geräte",
   "window.searching": "Suche nach Geräten…",
   "window.searching_hint": "Chromecast, ein LG-, AirPlay- oder DLNA-TV müssen im selben WLAN und eingeschaltet sein.",
-
   "device.chromecast": "Chromecast",
   "device.webos": "LG webOS",
   "device.airplay": "AirPlay",
   "device.dlna": "DLNA",
-
   "window.connecting": "Verbinde mit {name}…",
   "window.pairing": "Bitte am TV mit der Fernbedienung bestätigen",
   "window.connect_failed": "Verbindung fehlgeschlagen: {error}",
@@ -35,7 +30,6 @@
   "window.pin_body": "{name} zeigt jetzt einen Code an. Bitte hier eingeben.",
   "window.pin_connect": "Verbinden",
   "window.pin_cancel": "Abbrechen",
-
   "window.cast_group": "Casten",
   "window.media_file": "Mediendatei…",
   "window.media_file_sub": "Video/Musik vom Gerät",
@@ -51,7 +45,6 @@
   "window.playback": "Wiedergabe",
   "window.controls": "Steuerung",
   "window.volume": "Lautstärke",
-
   "window.choose_file": "Mediendatei wählen",
   "window.sending": "Sende „{title}“ …",
   "window.play_failed": "Abspielen fehlgeschlagen",
@@ -61,8 +54,9 @@
   "window.link_failed": "Link konnte nicht gecastet werden",
   "window.mirror_stopped": "Spiegeln beendet",
   "window.mirror_running": "Spiegeln läuft ({engine})",
+  "window.mirror_starting": "Spiegelung wird gestartet…",
+  "window.mirror_failed": "Spiegeln fehlgeschlagen: {error}",
   "window.unknown_engine": "Unbekannte Engine – siehe Einstellungen",
-
   "settings.title": "Einstellungen",
   "settings.general": "Allgemein",
   "settings.mirror_group": "Bildschirm spiegeln",
@@ -74,9 +68,13 @@
   "settings.resolution": "Auflösung",
   "settings.bitrate": "Bitrate (kbit/s)",
   "settings.fps": "Bildrate (FPS)",
-  "settings.openscreen_desc": "Pfad zum cast_sender-Binary (nur für Engine „openscreen“)",
-  "settings.openscreen_path": "cast_sender-Pfad",
+  "settings.audio": "Ton mitspiegeln",
+  "settings.audio_sub": "Systemton an den Fernseher senden",
+  "settings.encoder": "Video-Encoder",
+  "settings.encoder_auto": "Automatisch",
   "settings.app_group": "App",
+  "settings.updates_flatpak": "Updates über „flatpak update“",
+  "settings.updates_readonly": "Installation ist schreibgeschützt – Update über die Paketverwaltung",
   "settings.check_updates": "Nach Updates suchen",
   "settings.last_checked": "zuletzt geprüft: {date}",
   "settings.checking": "Suche …",

@@ -1,8 +1,6 @@
 {
   "language.name": "English",
-
   "common.error": "Error",
-
   "deps.feat.gui": "graphical interface",
   "deps.feat.cast": "device discovery & casting",
   "deps.feat.mirror": "screen mirroring",
@@ -17,17 +15,14 @@
   "deps.optional.body": "These optional components are missing — the related features will be disabled:\n\n{list}\n\nStart Schwupp anyway?",
   "deps.optional.start": "Start anyway",
   "deps.quit": "Quit",
-
   "window.settings": "Settings",
   "window.devices_found": "Devices found",
   "window.searching": "Searching for devices…",
   "window.searching_hint": "Chromecast, an LG, AirPlay or DLNA TV must be on the same Wi-Fi and switched on.",
-
   "device.chromecast": "Chromecast",
   "device.webos": "LG webOS",
   "device.airplay": "AirPlay",
   "device.dlna": "DLNA",
-
   "window.connecting": "Connecting to {name}…",
   "window.pairing": "Please confirm on the TV with the remote",
   "window.connect_failed": "Connection failed: {error}",
@@ -35,7 +30,6 @@
   "window.pin_body": "{name} is showing a code now. Please enter it here.",
   "window.pin_connect": "Connect",
   "window.pin_cancel": "Cancel",
-
   "window.cast_group": "Cast",
   "window.media_file": "Media file…",
   "window.media_file_sub": "Video/music from this device",
@@ -51,7 +45,6 @@
   "window.playback": "Playback",
   "window.controls": "Controls",
   "window.volume": "Volume",
-
   "window.choose_file": "Choose media file",
   "window.sending": "Sending “{title}” …",
   "window.play_failed": "Playback failed",
@@ -61,8 +54,9 @@
   "window.link_failed": "Could not cast the link",
   "window.mirror_stopped": "Mirroring stopped",
   "window.mirror_running": "Mirroring active ({engine})",
+  "window.mirror_starting": "Starting mirroring…",
+  "window.mirror_failed": "Mirroring failed: {error}",
   "window.unknown_engine": "Unknown engine – see settings",
-
   "settings.title": "Settings",
   "settings.general": "General",
   "settings.mirror_group": "Screen mirroring",
@@ -74,9 +68,13 @@
   "settings.resolution": "Resolution",
   "settings.bitrate": "Bitrate (kbit/s)",
   "settings.fps": "Frame rate (FPS)",
-  "settings.openscreen_desc": "Path to the cast_sender binary (only for the “openscreen” engine)",
-  "settings.openscreen_path": "cast_sender path",
+  "settings.audio": "Mirror audio",
+  "settings.audio_sub": "Send the system sound to the TV",
+  "settings.encoder": "Video encoder",
+  "settings.encoder_auto": "Automatic",
   "settings.app_group": "App",
+  "settings.updates_flatpak": "Updates via “flatpak update”",
+  "settings.updates_readonly": "Installation is read-only – update via your package manager",
   "settings.check_updates": "Check for updates",
   "settings.last_checked": "last checked: {date}",
   "settings.checking": "Checking …",
