@@ -46,7 +46,13 @@ work just like a Chromecast, including screen mirroring.
 
 **AirPlay 2 TVs** (Hisense/VIDAA, Samsung Tizen, Sony, older non-Cast models …) pair
 with the code shown on the TV the first time you connect; the pairing is stored, so
-this happens only once.
+this happens only once. Screen mirroring uses a separate protocol and therefore asks
+for its own code once — see [Screen mirroring](#screen-mirroring) below.
+
+How much these TVs accept varies a lot, and their advertised capabilities are not
+to be trusted: the tested Hisense claims to support AirPlay video but refuses every
+playback request, while mirroring to it works fine. Schwupp says what a device
+actually does instead of leaving you guessing.
 
 ### Other TVs
 
@@ -169,13 +175,24 @@ Schwupp stands on the shoulders of these projects:
 | [requests](https://github.com/psf/requests) | HTTP for the updater | Apache-2.0 |
 | [PyGObject](https://pygobject.gnome.org/) · [GTK4](https://gtk.org/) · [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) | the user interface | LGPL |
 | [GStreamer](https://gstreamer.freedesktop.org/) | screen capture & H.264 encoding | LGPL |
+| [doubletake](https://github.com/omarroth/doubletake) | AirPlay screen mirroring (the protocol pyatv does not speak) | LGPL-3.0 |
+| [wf-recorder](https://github.com/ammen99/wf-recorder) | Wayland capture where no screen-cast portal exists | MIT |
 
 The native Cast-streaming wire format was derived from the public
 [Chromium Open Screen Library](https://chromium.googlesource.com/openscreen/) /
 `media/cast` sources (no code copied). The self-update flow is modeled on the author's
 [DrivePulse](https://github.com/misc-de/DrivePulse) app.
 
-These dependencies keep their own licenses; the table above is informational.
+`doubletake` and `wf-recorder` are invoked as separate programs — Schwupp does not
+link against them — and the Flatpak ships them as standalone binaries alongside the
+app. They keep their own licenses, as do all dependencies; the table above is
+informational.
+
+A word of thanks is due for the AirPlay work in particular: mirroring from Linux
+was long considered impossible without FairPlay, Apple's DRM. That it works here
+rests on years of reverse engineering by the
+[UxPlay](https://github.com/antimof/UxPlay) and
+[RPiPlay](https://github.com/fd-/rpiplay) projects, which `doubletake` builds on.
 
 ## License
 
