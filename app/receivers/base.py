@@ -21,6 +21,7 @@ class Context:
 
 class Feature:
     MEDIA = "media"                # lokale Datei / URL abspielen
+    VIDEO = "video"               # Bewegtbild abspielen (nicht nur Ton)
     YOUTUBE = "youtube"           # YouTube-Video starten
     PLAYBACK = "playback"         # play/pause/stop
     VOLUME = "volume"             # Lautstärke setzen

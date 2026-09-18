@@ -14,7 +14,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from ..discovery import Discovery, ReceiverInfo  # noqa: E402
 from ..i18n import t  # noqa: E402
@@ -199,10 +199,16 @@ class MainWindow(Adw.ApplicationWindow):
         grp_src = Adw.PreferencesGroup(title=t("window.cast_group"))
         box.append(grp_src)
 
+        video = receiver.supports(Feature.VIDEO)
         if receiver.supports(Feature.MEDIA):
-            row_file = Adw.ActionRow(title=t("window.media_file"),
-                                     subtitle=t("window.media_file_sub"), activatable=True)
-            row_file.add_prefix(Gtk.Image.new_from_icon_name("folder-videos-symbolic"))
+            # Geräte, die nur Ton annehmen, bekommen auch nur Musik angeboten –
+            # sonst läuft der Nutzer immer wieder in dieselbe Absage.
+            row_file = Adw.ActionRow(
+                title=t("window.media_file") if video else t("window.audio_file"),
+                subtitle=t("window.media_file_sub") if video else t("window.audio_file_sub"),
+                activatable=True)
+            row_file.add_prefix(Gtk.Image.new_from_icon_name(
+                "folder-videos-symbolic" if video else "folder-music-symbolic"))
             row_file.connect("activated", self._choose_file)
             grp_src.add(row_file)
 
@@ -219,7 +225,9 @@ class MainWindow(Adw.ApplicationWindow):
             self._mirror_row = None
 
         # -- Link ------------------------------------------------------------
-        if receiver.supports(Feature.MEDIA):
+        # Links sind praktisch immer Bewegtbild (YouTube, Web-Videos); auf
+        # Geräten ohne Video-Wiedergabe wäre das Feld nur eine Sackgasse.
+        if receiver.supports(Feature.MEDIA) and video:
             grp_link = Adw.PreferencesGroup(title=t("window.link_group"))
             box.append(grp_link)
             self._url_row = Adw.EntryRow(title=t("window.url_placeholder"))
@@ -262,8 +270,22 @@ class MainWindow(Adw.ApplicationWindow):
     # Aktionen
     # ====================================================================
     def _choose_file(self, _row) -> None:  # noqa: ANN001
-        dialog = Gtk.FileDialog(title=t("window.choose_file"))
+        video = self.receiver is not None and self.receiver.supports(Feature.VIDEO)
+        dialog = Gtk.FileDialog(
+            title=t("window.choose_file") if video else t("window.choose_audio"))
+        dialog.set_filters(self._file_filters(video))
         dialog.open(self, None, self._on_file_chosen)
+
+    @staticmethod
+    def _file_filters(video: bool) -> Gio.ListStore:
+        """Dateifilter für den Auswahldialog – ohne Video, wo das Gerät keins nimmt."""
+        store = Gio.ListStore.new(Gtk.FileFilter)
+        media = Gtk.FileFilter()
+        media.set_name(t("window.filter_media") if video else t("window.filter_audio"))
+        for mime in ("audio/*", *(("video/*",) if video else ())):
+            media.add_mime_type(mime)
+        store.append(media)
+        return store
 
     def _on_file_chosen(self, dialog, result) -> None:  # noqa: ANN001
         try:

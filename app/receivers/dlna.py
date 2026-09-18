@@ -16,7 +16,7 @@ import contextlib
 from ..dlna import DlnaRenderer
 from .base import Feature, Receiver
 
-_FEATURES = {Feature.MEDIA, Feature.PLAYBACK}
+_FEATURES = {Feature.MEDIA, Feature.VIDEO, Feature.PLAYBACK}
 
 
 class DlnaReceiver(Receiver):

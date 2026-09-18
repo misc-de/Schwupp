@@ -26,7 +26,7 @@ from .base import Feature, Receiver
 #     ist unter NetworkManager nicht stabil zu halten (siehe docs/MIRRORING.md).
 # Bildschirmspiegelung zuverlässig nur über ein Chromecast-/Google-TV-Gerät.
 _FEATURES = {
-    Feature.MEDIA, Feature.YOUTUBE, Feature.PLAYBACK, Feature.VOLUME,
+    Feature.MEDIA, Feature.VIDEO, Feature.YOUTUBE, Feature.PLAYBACK, Feature.VOLUME,
 }
 
 YOUTUBE_APP = "youtube.leanback.v4"

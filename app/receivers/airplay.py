@@ -29,6 +29,10 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from .base import Feature, Receiver
 
+# Feature.VIDEO steht bewusst nicht drin: Ob ein AirPlay-Gerät Bewegtbild
+# annimmt, ist ihm vorab nicht anzusehen – die Feature-Bits mancher Fernseher
+# behaupten Video und liefern beim Versuch einen 404. supports() entscheidet
+# das deshalb anhand dessen, was das Gerät tatsächlich getan hat.
 _FEATURES = {Feature.MEDIA, Feature.PLAYBACK, Feature.MIRROR_HLS,
              Feature.MIRROR_AIRPLAY}
 
@@ -189,9 +193,22 @@ class AirplayReceiver(Receiver):
             with contextlib.suppress(Exception):
                 asyncio.run_coroutine_threadsafe(
                     self._close_atv(atv), loop).result(5)
+        # Noch laufende Aufgaben abbrechen, bevor der Loop stehen bleibt: pyatv
+        # hält Hintergrund-Tasks (Feedback, Zeitgeber), die sonst nach dem Stopp
+        # weiterlaufen wollen und einen "Event loop is closed"-Traceback auslösen.
+        with contextlib.suppress(Exception):
+            asyncio.run_coroutine_threadsafe(self._cancel_pending(), loop).result(5)
         loop.call_soon_threadsafe(loop.stop)
         if thread is not None:
             thread.join(timeout=5)
+
+    @staticmethod
+    async def _cancel_pending() -> None:
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     @staticmethod
     async def _close_atv(atv) -> None:  # noqa: ANN001
@@ -208,6 +225,8 @@ class AirplayReceiver(Receiver):
         try:
             self._run(self._atv.stream.play_url(url), _PLAY_TIMEOUT)
         except Exception as exc:  # noqa: BLE001
+            if any(code in str(exc) for code in _UNSUPPORTED_CODES):
+                self._remember_no_video()
             raise self._explain(exc) from exc
 
     def _stream_audio(self, url: str) -> None:
@@ -279,4 +298,26 @@ class AirplayReceiver(Receiver):
                     self._close_atv(atv), self._loop).result(5)
 
     def supports(self, feature: str) -> bool:
+        if feature == Feature.VIDEO:
+            return self._video_supported()
         return feature in _FEATURES
+
+    # -- Gelernte Geräte-Eigenschaft: nimmt es Bewegtbild an? ----------------
+    def _video_supported(self) -> bool:
+        """True, solange das Gerät die Video-Wiedergabe nicht abgelehnt hat.
+
+        Bis zum ersten Versuch wird Video angeboten – die meisten AirPlay-Geräte
+        können es. Lehnt eines ab, merkt sich Schwupp das für dieses Gerät und
+        blendet Video-Inhalte künftig aus, statt sie erneut anzubieten.
+        """
+        config = getattr(self.context, "config", None)
+        if config is None or not hasattr(config, "device_value_for"):
+            return True
+        return bool(config.device_value_for(self.info, "airplay_video"))
+
+    def _remember_no_video(self) -> None:
+        config = getattr(self.context, "config", None)
+        if config is None or not hasattr(config, "set_device_value_for"):
+            return
+        config.set_device_value_for(self.info, "airplay_video", False)
+        config.save()

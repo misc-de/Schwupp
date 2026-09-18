@@ -96,6 +96,13 @@ class SettingsDialog(Adw.PreferencesDialog):
         self._audio.connect("notify::active", self._on_audio)
         grp_video.add(self._audio)
 
+        # Hat ein AirPlay-Gerät die Video-Wiedergabe abgelehnt, merkt Schwupp
+        # sich das und blendet Videos aus. Hier lässt sich das zurücknehmen –
+        # etwa nach einem Firmware-Update des Fernsehers.
+        if receiver.kind == "airplay" and not self._config.device_value_for(
+                info, "airplay_video"):
+            grp_video.add(self._build_video_reset_row(info))
+
         # Encoder-Wahl nur zeigen, wenn es überhaupt etwas zu wählen gibt.
         encoders = available_encoders()
         if len(encoders) > 1:
@@ -127,6 +134,21 @@ class SettingsDialog(Adw.PreferencesDialog):
     def _on_fps(self, row, _p) -> None:  # noqa: ANN001
         self._config.set_device_value_for(self._info, "mirror_fps", int(row.get_value()))
         self._config.save()
+
+    def _build_video_reset_row(self, info):  # noqa: ANN001
+        row = Adw.ActionRow(title=t("settings.video_refused"),
+                            subtitle=t("settings.video_refused_sub"))
+        button = Gtk.Button(label=t("settings.video_retry"), valign=Gtk.Align.CENTER)
+
+        def retry(_b) -> None:  # noqa: ANN001
+            self._config.set_device_value_for(info, "airplay_video", True)
+            self._config.save()
+            button.set_sensitive(False)
+            row.set_subtitle(t("settings.video_retry_done"))
+
+        button.connect("clicked", retry)
+        row.add_suffix(button)
+        return row
 
     def _on_audio(self, row, _p) -> None:  # noqa: ANN001
         self._config.set_device_value_for(self._info, "mirror_audio", bool(row.get_active()))

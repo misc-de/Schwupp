@@ -27,6 +27,10 @@ _DEFAULTS: dict[str, Any] = {
     # Fläche, die der Empfänger meldet (oft 4K) – manche Geräte zeigen dann nur
     # ein Standbild, siehe docs/MIRRORING.md.
     "mirror_airplay_codec": "h264",
+    # Nimmt dieses AirPlay-Gerät Bewegtbild an? Wird beim ersten abgelehnten
+    # Versuch auf false gesetzt; danach bietet Schwupp dort keine Videos mehr an
+    # (Ton und Bildschirmspiegelung laufen weiter). Manuell wieder einschaltbar.
+    "airplay_video": True,
     # Zuletzt genutztes Gerät (UUID) – für Auto-Reconnect-Komfort
     "last_device_uuid": "",
     # Zeitpunkt der letzten Update-Prüfung (ISO-String, vom Updater gesetzt)
@@ -44,7 +48,7 @@ _DEFAULTS: dict[str, Any] = {
 DEVICE_KEYS = (
     "mirror_engine", "mirror_bitrate_kbps", "mirror_fps",
     "mirror_height", "mirror_target_delay_ms", "mirror_audio", "mirror_encoder",
-    "mirror_airplay_codec",
+    "mirror_airplay_codec", "airplay_video",
 )
 
 
