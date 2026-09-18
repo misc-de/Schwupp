@@ -33,8 +33,12 @@ from .base import Feature, Receiver
 # annimmt, ist ihm vorab nicht anzusehen – die Feature-Bits mancher Fernseher
 # behaupten Video und liefern beim Versuch einen 404. supports() entscheidet
 # das deshalb anhand dessen, was das Gerät tatsächlich getan hat.
-_FEATURES = {Feature.MEDIA, Feature.PLAYBACK, Feature.MIRROR_HLS,
-             Feature.MIRROR_AIRPLAY}
+#
+# Feature.PLAYBACK fehlt ebenfalls: Die Fernbedienungsbefehle quittieren diese
+# Geräte zwar mit "ok", tun aber nichts – Knöpfe, die nichts bewirken, sind
+# schlimmer als gar keine. Beendet wird eine laufende Wiedergabe über den
+# Zurück-Weg, der die Verbindung trennt (siehe MainWindow._cleanup_receiver).
+_FEATURES = {Feature.MEDIA, Feature.MIRROR_HLS, Feature.MIRROR_AIRPLAY}
 
 _SCAN_TIMEOUT = 6       # s, unicast-Scan auf bekannten Host
 _CONNECT_TIMEOUT = 15   # s
@@ -270,7 +274,10 @@ class AirplayReceiver(Receiver):
                 "„Bildschirm spiegeln“.")
         return RuntimeError(f"AirPlay-Wiedergabe fehlgeschlagen: {exc}")
 
-    # -- Steuerung (best effort; nicht jeder AirPlay-TV kann Remote-Befehle) ---
+    # -- Steuerung -----------------------------------------------------------
+    # Nicht über die Oberfläche erreichbar (kein Feature.PLAYBACK), aber intern
+    # genutzt: stop() beendet damit eine laufende Übertragung, bevor es die
+    # Sitzung schließt.
     def _remote(self, action: str) -> None:
         if self._atv is None:
             return

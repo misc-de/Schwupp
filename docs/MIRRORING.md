@@ -206,6 +206,23 @@ Gerät meldet Erfolg, aber es kommt kein (bewegtes) Bild:
    sudo ufw allow from <TV-IP> proto udp to any port 60000:60010 comment 'AirPlay Mirroring'
    ```
 
+### Was die Oberfläche bei so einem Gerät anbietet
+
+Nach den Messungen bleibt auf dem getesteten Hisense genau das übrig, was auch
+funktioniert:
+
+| Funktion | angeboten | Grund |
+|---|---|---|
+| Musikdatei | ja | Der Audio-Weg (RAOP) trägt |
+| Mediendatei (Video) | nein | `POST /play` → 404 |
+| Link casten | nein | Links sind Bewegtbild |
+| Bildschirm spiegeln | ja | funktioniert samt Ton |
+| Wiedergabe, Lautstärke | nein | Das Gerät quittiert die Befehle mit „ok" und ignoriert sie |
+
+Die Wiedergabesteuerung ist deshalb kein Feature des AirPlay-Backends mehr.
+Eine laufende Übertragung wird über den Zurück-Weg beendet, der die Verbindung
+trennt.
+
 ### Kopplung
 
 Beim ersten Mal zeigt der Fernseher einen Code, den Schwupp über denselben

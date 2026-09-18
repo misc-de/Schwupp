@@ -126,3 +126,20 @@ def test_missing_config_does_not_break_feature_query():
 
     recv = AirplayReceiver(_Info(), _Bare())
     assert recv.supports(Feature.VIDEO) is True
+
+
+def test_playback_controls_are_not_offered():
+    """Diese Geräte quittieren Fernbedienungsbefehle mit "ok" und ignorieren sie –
+    Knöpfe, die nichts bewirken, gehören nicht in die Oberfläche."""
+    from app.receivers.base import Feature
+    recv, _ = _receiver()
+    assert recv.supports(Feature.PLAYBACK) is False
+    assert recv.supports(Feature.VOLUME) is False
+
+
+def test_mirroring_and_media_remain():
+    """Was funktioniert, bleibt sichtbar."""
+    from app.receivers.base import Feature
+    recv, _ = _receiver()
+    assert recv.supports(Feature.MEDIA) is True
+    assert recv.supports(Feature.MIRROR_AIRPLAY) is True

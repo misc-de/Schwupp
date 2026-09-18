@@ -35,7 +35,7 @@ the fallback for unsupported locales).
 | Local media files | ✅ | ✅ | ✅ |
 | YouTube | ✅ (TV's own app) | ✅ (TV's own app) | ✅ (as video stream, if the TV accepts video) |
 | Web videos | ✅ | ✅ | ✅ |
-| Play / pause / stop, volume | ✅ | ✅ | stop (play/pause device-dependent) |
+| Play / pause / stop, volume | ✅ | ✅ | — (these TVs acknowledge the commands but ignore them) |
 | Screen mirroring (native, < 1 s) | ✅ | ✅ | — |
 | Screen mirroring (AirPlay) | — | — | ✅ |
 | Screen mirroring (HLS) | ✅ | ✅ | ✅ |
