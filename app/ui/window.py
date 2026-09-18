@@ -196,10 +196,15 @@ class MainWindow(Adw.ApplicationWindow):
         clamp.set_child(box)
 
         # -- Quellen ---------------------------------------------------------
-        grp_src = Adw.PreferencesGroup(title=t("window.cast_group"))
-        box.append(grp_src)
-
         video = receiver.supports(Feature.VIDEO)
+        grp_src = Adw.PreferencesGroup(title=t("window.cast_group"))
+        # Nimmt das Gerät kein Bewegtbild an, steht der Grund und der Ausweg
+        # direkt über den Optionen – statt dass man ihn durch Ausprobieren sucht.
+        if not video and engines_for_kind(receiver.kind):
+            grp_src.set_description(t("window.video_via_mirror"))
+        elif not video:
+            grp_src.set_description(t("window.audio_only"))
+        box.append(grp_src)
         if receiver.supports(Feature.MEDIA):
             # Geräte, die nur Ton annehmen, bekommen auch nur Musik angeboten –
             # sonst läuft der Nutzer immer wieder in dieselbe Absage.
