@@ -108,3 +108,54 @@ kein Monitor), stirbt nur sie – das Bild läuft weiter.
 HLS und DLNA-TS führen den Ton als AAC-Spur mit; ohne verfügbare Tonquelle
 bleibt dort die stille Spur, weil manche Receiver einen reinen Video-Stream
 verwerfen.
+
+
+---
+
+## AirPlay-Fernseher, die nur Ton annehmen (Hisense 75A5FE, gemessen 09/2026)
+
+Nicht jedes Gerät, das sich per AirPlay koppeln lässt, kann auch Video. Der
+getestete Hisense koppelt sauber, spielt aber ausschließlich Audio:
+
+| Schritt | Antwort |
+|---|---|
+| `POST /pair-verify` | 200 OK |
+| `SETUP` / `RECORD` / `POST /feedback` | 200 OK |
+| **`POST /play`** (Video) | **404 Not Found** |
+| `POST /rate`, `PUT /setProperty` | 404 / 501 |
+| Audio-Stream (RAOP, `stream_file`) | läuft, Ton kommt am TV an |
+
+Die mDNS-Feature-Bits des Geräts melden `SupportsAirPlayVideoV2`,
+`SupportsAirPlayScreen` und `SupportsAirPlayVideoPlayQueue` – **die Bits lügen**.
+Verlässlich ist nur der Versuch.
+
+Zwei Fallstricke bei der Fehlersuche:
+
+* **Unauthentifiziert antwortet `/play` mit 403, nicht mit 404.** Das sieht nach
+  „Endpunkt existiert, nur Auth fehlt" aus. Der Fernseher antwortet vor der
+  Authentifizierung aber auf *jeden* Pfad mit 403; die ehrliche Antwort (404)
+  kommt erst in der aufgebauten Sitzung.
+* **Die Zugriffskontrolle ist eine eigene Hürde.** Steht am TV „Code bei jeder
+  Verbindung", verlangt das Gerät zusätzlich zum gespeicherten Pairing pro
+  Sitzung eine frische Freigabe und zeigt dabei einen neuen Code. Beim Umstellen
+  dieser Einstellung verwirft der Fernseher bestehende Kopplungen – danach ist
+  ein einmaliges Neu-Pairing nötig. Erkennbar daran, dass die zweite
+  `pair-verify`-Antwort 6 statt 3 Byte lang ist (Fehler-TLV) und das folgende
+  `SETUP` unbeantwortet bleibt.
+
+### Was auf so einem Gerät nicht geht
+
+Für dieses Modell wurden alle Alternativen durchprobiert – offen ist nur
+Port 7000 (AirPlay) und 36669 (Hisense RemoteNOW):
+
+- **AirPlay-Mirroring**: erfordert FairPlay (Apples DRM), wie schon beim LG.
+- **Versteckter Cast-Receiver auf 8009**: Port geschlossen (der Trick, der bei
+  LG funktioniert, greift hier nicht).
+- **DLNA/UPnP**: keine SSDP-Antwort, kein AVTransport.
+- **DIAL** (YouTube-App starten wie bei webOS): keine SSDP-Antwort.
+- **Hisense RemoteNOW** (MQTT auf 36669): verlangt ein Client-Zertifikat, das
+  nur in der Hersteller-App steckt – und böte ohnehin nur Fernbedienung.
+
+Konsequenz im Code: `app/receivers/airplay.py` schickt Audiodateien direkt über
+den RAOP-Weg (`stream_file`) und übersetzt eine 404/501-Absage beim Video in
+eine Meldung, die den Grund nennt, statt in einen Zeitüberlauf zu laufen.
