@@ -247,7 +247,8 @@ class AirplayReceiver(Receiver):
         if any(code in text for code in _UNSUPPORTED_CODES):
             return RuntimeError(
                 "Dieser Fernseher nimmt über AirPlay keine Videos an – er kennt "
-                "den Wiedergabe-Befehl nicht. Musik lässt sich trotzdem senden.")
+                "den Wiedergabe-Befehl nicht. Musik läuft; für Bild nutze "
+                "„Bildschirm spiegeln“.")
         return RuntimeError(f"AirPlay-Wiedergabe fehlgeschlagen: {exc}")
 
     # -- Steuerung (best effort; nicht jeder AirPlay-TV kann Remote-Befehle) ---

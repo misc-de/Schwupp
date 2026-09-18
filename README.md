@@ -33,7 +33,7 @@ the fallback for unsupported locales).
 |---|---|---|---|
 | Automatic discovery | ✅ | ✅ | ✅ |
 | Local media files | ✅ | ✅ | ✅ |
-| YouTube | ✅ | ✅ | ✅ (as video stream) |
+| YouTube | ✅ (TV's own app) | ✅ (TV's own app) | ✅ (as video stream, if the TV accepts video) |
 | Web videos | ✅ | ✅ | ✅ |
 | Play / pause / stop, volume | ✅ | ✅ | stop (play/pause device-dependent) |
 | Screen mirroring (native, < 1 s) | ✅ | ✅ | — |
@@ -77,7 +77,9 @@ sudo ufw allow from <TV-IP> proto udp to any port 60000:60010 comment 'AirPlay M
 ```
 
 Not every AirPlay TV accepts video at all: some only take audio. Schwupp says so
-plainly instead of leaving you guessing.
+plainly instead of leaving you guessing — and on such a TV, mirroring is the way
+to get a picture there, including for YouTube (there is no startable YouTube app
+over AirPlay, unlike on LG webOS or Chromecast).
 
 ## Architecture
 

@@ -26,7 +26,9 @@ def test_device_rejection_becomes_a_readable_message(message):
     assert isinstance(result, RuntimeError)
     text = str(result)
     assert "keine Videos" in text
-    assert "Musik" in text          # der Weg, der bei diesen Geräten trägt
+    # Die Meldung muss die beiden Wege nennen, die bei solchen Geräten tragen
+    assert "Musik" in text
+    assert "spiegeln" in text
 
 
 @pytest.mark.parametrize("message", [
