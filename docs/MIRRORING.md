@@ -159,3 +159,57 @@ Port 7000 (AirPlay) und 36669 (Hisense RemoteNOW):
 Konsequenz im Code: `app/receivers/airplay.py` schickt Audiodateien direkt über
 den RAOP-Weg (`stream_file`) und übersetzt eine 404/501-Absage beim Video in
 eine Meldung, die den Grund nennt, statt in einen Zeitüberlauf zu laufen.
+
+
+---
+
+## ✅ GELÖST: AirPlay-Spiegelung auf Nicht-Apple-TVs (09/2026)
+
+Derselbe Hisense, der oben kein Video über `play_url` annimmt, **spiegelt den
+Bildschirm einwandfrei** – nur eben über das AirPlay-Mirroring-Protokoll, das
+pyatv nicht spricht. Übernommen hat das [doubletake](https://github.com/omarroth/doubletake)
+(Go, LGPL-3.0), das Schwupp als Hilfsprogramm aufruft – wie `wf-recorder` und
+`yt-dlp` auch. Engine: `app/mirror/airplay.py`.
+
+### Die Annahme, die uns aufgehalten hat
+
+„AirPlay-Mirror braucht FairPlay (Apples DRM), also von Linux aus unmöglich" –
+so stand es oben im Sackgassen-Kapitel, und für den LG stimmt es. Für dieses
+Gerät nicht:
+
+```
+FairPlay SAP unsupported (receiver does not support FairPlay SAP:
+FPSAP feature bit is not advertised) ; continuing with pair-verify DataStream setup
+```
+
+Der Fernseher kann FairPlay-SAP **gar nicht** und nimmt stattdessen den neueren
+`pair-verify`-DataStream-Weg – ganz ohne DRM. Die Feature-Bits vor dem Versuch
+zu deuten, führt also in die Irre; erst der Verbindungsaufbau zeigt die Wahrheit.
+
+### Zwei Stellschrauben entscheiden über Erfolg
+
+Beide erzeugen dasselbe schwer deutbare Fehlerbild – die Sitzung steht, das
+Gerät meldet Erfolg, aber es kommt kein (bewegtes) Bild:
+
+1. **H.264 statt HEVC.** Mit HEVC verlangt das Protokoll die größte Fläche, die
+   der Empfänger meldet – hier 3840×2160. Der TV nahm den Strom an und zeigte
+   ein **Standbild**. Mit `-video-codec h264` (1920×1080, ~4100 kbit/s) läuft es
+   rund. Vorgabe in Schwupp ist deshalb `h264`, umstellbar über
+   `mirror_airplay_codec`.
+2. **Fester UDP-Portbereich für die Firewall.** Der Empfänger sondiert während
+   des Verbindungsaufbaus per UDP einen Zeitsynchronisations-Port beim Sender.
+   Verwirft eine Firewall das, kommt die Sitzung trotzdem zustande – **aber es
+   erscheint nie ein Bild**. Schwupp gibt darum immer `-port-range 60000-60010`
+   vor, sodass sich eine Regel angeben lässt:
+
+   ```sh
+   sudo ufw allow from <TV-IP> proto udp to any port 60000:60010 comment 'AirPlay Mirroring'
+   ```
+
+### Kopplung
+
+Beim ersten Mal zeigt der Fernseher einen Code, den Schwupp über denselben
+Dialog abfragt wie das AirPlay-Pairing und dem Hilfsprogramm auf die
+Standardeingabe reicht. Der Code gilt nur für einen Versuch – bei jedem neuen
+Anlauf zeigt das Gerät einen neuen. Danach liegen die Zugangsdaten unter
+`~/.config/schwupp/doubletake-credentials.json`.

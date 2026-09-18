@@ -96,6 +96,28 @@ pip-modules:
 		--output python3-cffi --yaml --prefer-wheels cffi
 	@echo "python3-modules.yaml und python3-cffi.yaml aktualisiert – bitte einchecken."
 
+# Erzeugt das Vendor-Archiv für doubletake (AirPlay-Spiegelung) neu und legt es
+# in den Download-Cache, von wo scripts/publish-pages.sh es mitspiegelt. Nötig,
+# wenn im Manifest ein neuer doubletake-Commit gepinnt wird. Braucht Go.
+#
+# go.mod und go.sum wandern mit ins Archiv: `go mod tidy` sortiert dort eine
+# Abhängigkeit um, und ohne diesen Stand lehnt der Build das Vendor-Verzeichnis
+# ab ("is explicitly required in go.mod, but not marked as explicit").
+.PHONY: doubletake-vendor
+doubletake-vendor:
+	@command -v go >/dev/null || { echo "Go wird gebraucht (nur für dieses Ziel)."; exit 1; }
+	@commit=$$(awk '/name: doubletake/,/sha256/' $(FP_MANIFEST) | awk '/commit:/{print $$2; exit}'); \
+	tmp=$$(mktemp -d); \
+	git clone -q https://github.com/omarroth/doubletake.git $$tmp/src && \
+	git -C $$tmp/src checkout -q $$commit && \
+	(cd $$tmp/src && GOFLAGS=-mod=mod go mod tidy && GOFLAGS=-mod=mod go mod vendor) && \
+	tar -czf $$tmp/doubletake-vendor.tar.gz -C $$tmp/src vendor go.mod go.sum && \
+	sha=$$(sha256sum $$tmp/doubletake-vendor.tar.gz | cut -d' ' -f1) && \
+	mkdir -p .flatpak-builder/downloads/$$sha && \
+	cp $$tmp/doubletake-vendor.tar.gz .flatpak-builder/downloads/$$sha/ && \
+	echo "Vendor-Archiv erzeugt. sha256 im Manifest eintragen:"; echo "  $$sha"; \
+	rm -rf $$tmp
+
 # ---------------------------------------------------------------------------
 # Flatpak: ein OSTree-Repo als Update-Quelle, das BEIDE Architekturen enthält.
 #

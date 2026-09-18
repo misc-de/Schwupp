@@ -37,6 +37,7 @@ the fallback for unsupported locales).
 | Web videos | ✅ | ✅ | ✅ |
 | Play / pause / stop, volume | ✅ | ✅ | stop (play/pause device-dependent) |
 | Screen mirroring (native, < 1 s) | ✅ | ✅ | — |
+| Screen mirroring (AirPlay) | — | — | ✅ |
 | Screen mirroring (HLS) | ✅ | ✅ | ✅ |
 | Sound while mirroring | ✅ | ✅ | ✅ |
 
@@ -57,6 +58,20 @@ volume control. (Screen mirroring on these needs a Chromecast.)
 
 Mirror your desktop to the TV. (Curious how it works? See
 [docs/MIRRORING.md](docs/MIRRORING.md).)
+
+On **AirPlay TVs** this uses the AirPlay mirroring protocol by way of
+[doubletake](https://github.com/omarroth/doubletake), which the Flatpak bundles.
+Two things are worth knowing: the TV shows a one-time code the first time, and
+the receiver probes a UDP timing port on your machine during setup. If a
+firewall drops that, the session comes up but **no picture ever appears** — so
+allow the range Schwupp uses:
+
+```bash
+sudo ufw allow from <TV-IP> proto udp to any port 60000:60010 comment 'AirPlay Mirroring'
+```
+
+Not every AirPlay TV accepts video at all: some only take audio. Schwupp says so
+plainly instead of leaving you guessing.
 
 ## Architecture
 

@@ -23,6 +23,10 @@ _DEFAULTS: dict[str, Any] = {
     # H.264-Encoder: "auto" nimmt den ersten verfügbaren (x264enc bevorzugt),
     # sonst "x264" | "openh264" | "vaapi" | "v4l2" erzwingen.
     "mirror_encoder": "auto",
+    # Codec der AirPlay-Spiegelung: "h264" oder "hevc". HEVC verlangt die größte
+    # Fläche, die der Empfänger meldet (oft 4K) – manche Geräte zeigen dann nur
+    # ein Standbild, siehe docs/MIRRORING.md.
+    "mirror_airplay_codec": "h264",
     # Zuletzt genutztes Gerät (UUID) – für Auto-Reconnect-Komfort
     "last_device_uuid": "",
     # Zeitpunkt der letzten Update-Prüfung (ISO-String, vom Updater gesetzt)
@@ -40,6 +44,7 @@ _DEFAULTS: dict[str, Any] = {
 DEVICE_KEYS = (
     "mirror_engine", "mirror_bitrate_kbps", "mirror_fps",
     "mirror_height", "mirror_target_delay_ms", "mirror_audio", "mirror_encoder",
+    "mirror_airplay_codec",
 )
 
 

@@ -36,6 +36,7 @@
   "window.mirror": "Bildschirm spiegeln",
   "window.mirror_sub": "siehe Einstellungen",
   "mirror.desc.native": "Nativ",
+  "mirror.desc.airplay": "AirPlay",
   "mirror.desc.hls": "HLS",
   "mirror.desc.dlnats": "DLNA",
   "window.start": "Start",

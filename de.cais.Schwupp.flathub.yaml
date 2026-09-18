@@ -112,6 +112,58 @@ modules:
           version-query: .tag_name
           url-query: .assets[] | select(.name == "yt-dlp") | .browser_download_url
 
+  # AirPlay-Bildschirmspiegelung. doubletake spricht das AirPlay-Protokoll
+  # (RTSP + verschlüsselter Videostrom, SRP-6a-Pairing); pyatv kann das nicht.
+  # Gebaut wird mit einer eigens geholten Go-Toolchain – im SDK ist keine
+  # enthalten – und aus gevendorten Abhängigkeiten, damit der Build offline
+  # bleibt. Das Vendor-Archiv wird mit `make doubletake-vendor` erzeugt und
+  # neben dem Flatpak-Repo gespiegelt.
+  - name: golang
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/golang && cp -a . /app/golang/
+    cleanup:
+      - '*'     # reine Bauzeit-Abhängigkeit, landet nicht im fertigen Paket
+    sources:
+      - type: archive
+        url: https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+        sha256: 63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+        strip-components: 1
+        only-arches:
+          - x86_64
+      - type: archive
+        url: https://go.dev/dl/go1.27.1.linux-arm64.tar.gz
+        sha256: 3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec
+        strip-components: 1
+        only-arches:
+          - aarch64
+
+  - name: doubletake
+    buildsystem: simple
+    build-options:
+      append-path: /app/golang/bin
+      env:
+        GOROOT: /app/golang
+        GOPATH: /run/build/doubletake/.gopath
+        GOCACHE: /run/build/doubletake/.gocache
+        GOFLAGS: -mod=vendor
+        GOTOOLCHAIN: local
+        CGO_ENABLED: '0'
+    build-commands:
+      - go build -trimpath -ldflags=-s -o doubletake ./cmd/doubletake
+      - install -Dm755 doubletake /app/bin/doubletake
+    sources:
+      - type: git
+        url: https://github.com/omarroth/doubletake.git
+        commit: ae067228d76df011375164814b729932ed55ca2f
+      # Abhängigkeiten als vendor/ daneben entpacken (kein Netz beim Bauen).
+      # strip-components: 0 ist zwingend – der Standardwert 1 würde die oberste
+      # Ebene entfernen, womit go.mod/go.sum verschwinden und vendor/ zerfällt.
+      - type: archive
+        url: https://misc-de.github.io/Schwupp/mirror/doubletake-vendor.tar.gz
+        sha256: a3da76e5257c37db2cf5485bdf499c89b95e70384a86a04de5ac052b5fd0f4a5
+        strip-components: 0
+
   # cffi muss VOR den übrigen Python-Modulen stehen: miniaudio (Abhängigkeit
   # von pyatv) baut seine C-Erweiterung per cffi und überspringt diesen Schritt
   # stillschweigend, wenn cffi zum Build-Zeitpunkt noch nicht importierbar ist –

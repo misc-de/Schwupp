@@ -36,6 +36,7 @@
   "window.mirror": "Mirror screen",
   "window.mirror_sub": "see settings",
   "mirror.desc.native": "Native",
+  "mirror.desc.airplay": "AirPlay",
   "mirror.desc.hls": "HLS",
   "mirror.desc.dlnats": "DLNA",
   "window.start": "Start",

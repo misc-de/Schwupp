@@ -29,7 +29,8 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from .base import Feature, Receiver
 
-_FEATURES = {Feature.MEDIA, Feature.PLAYBACK, Feature.MIRROR_HLS}
+_FEATURES = {Feature.MEDIA, Feature.PLAYBACK, Feature.MIRROR_HLS,
+             Feature.MIRROR_AIRPLAY}
 
 _SCAN_TIMEOUT = 6       # s, unicast-Scan auf bekannten Host
 _CONNECT_TIMEOUT = 15   # s
@@ -51,6 +52,9 @@ class AirplayReceiver(Receiver):
         self._atv = None          # verbundenes pyatv-Interface
         self._conf = None         # pyatv BaseConfig des Geräts
         self._stream_future = None  # laufende Audio-Übertragung
+        # Die Spiegel-Engine braucht denselben PIN-Dialog wie das Pairing hier;
+        # die Oberfläche hinterlegt ihn beim Verbinden.
+        self.pin_callback = None
 
     # -- Event-Loop-Thread -----------------------------------------------------
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
@@ -92,6 +96,7 @@ class AirplayReceiver(Receiver):
 
     # -- Verbindung ---------------------------------------------------------------
     def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
+        self.pin_callback = pin_cb
         import pyatv
         from pyatv import exceptions
         from pyatv.const import Protocol

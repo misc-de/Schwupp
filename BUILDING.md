@@ -18,6 +18,11 @@ Was Schwupp ist und wie man es bedient, steht im [README](README.md).
   **ScreenCast-Portal** (`xdg-desktop-portal-gnome`/`-wlr`) **oder**
   `wf-recorder`
 - *optional:* `yt-dlp` für Web-Videos (wird sonst ins venv installiert)
+- *optional:* [`doubletake`](https://github.com/omarroth/doubletake) für die
+  Bildschirmspiegelung auf **AirPlay**-Fernseher. Es ist in Go geschrieben und
+  wird mit `make && sudo make install` gebaut; Schwupp findet es über den PATH
+  oder über die Umgebungsvariable `SCHWUPP_DOUBLETAKE`. Im Flatpak ist es
+  bereits enthalten.
 
 ### Arch / Manjaro
 
@@ -96,6 +101,7 @@ Das Manifest bringt drei Dinge mit, die die Runtime nicht hat:
 | `gst-plugins-good-ximagesrc` | X11-Bildschirmaufnahme – in der GNOME-Runtime ist gst-plugins-good ohne X11 gebaut |
 | `wf-recorder` | Wayland-Aufnahme auf wlroots-Compositoren ohne Portal-Backend (z. B. phoc auf dem FLX1) |
 | `yt-dlp` | gepinnte, per sha256 geprüfte Binary statt Nachladen zur Laufzeit |
+| `doubletake` | AirPlay-Bildschirmspiegelung (pyatv kann das nicht); mit eigener Go-Toolchain aus gevendorten Quellen gebaut, damit der Build offline bleibt |
 
 Der Build läuft **offline**: Die Python-Abhängigkeiten stecken als gepinnte
 Wheels/Sdists in `python3-modules.yaml`. Ändern sich Abhängigkeiten in
@@ -103,6 +109,14 @@ Wheels/Sdists in `python3-modules.yaml`. Ändern sich Abhängigkeiten in
 
 ```bash
 make pip-modules     # schreibt python3-modules.yaml neu – anschließend einchecken
+```
+
+Wird im Manifest ein neuer `doubletake`-Commit gepinnt, muss auch dessen
+Vendor-Archiv neu erzeugt und mitgespiegelt werden:
+
+```bash
+make doubletake-vendor   # nennt die neue sha256 fürs Manifest
+make flatpak-pages       # legt das Archiv neben das Repo auf GitHub Pages
 ```
 
 ### Auslieferung: eigenes Repo für beide Architekturen
