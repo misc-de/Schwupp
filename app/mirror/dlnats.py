@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 
+from ..receivers.base import Feature
 from .capture import audio_source_desc, default_monitor_device, h264_encoder_desc
 from .engine import MirrorEngine, gst_element_exists, gst_init
 
@@ -23,6 +24,8 @@ from .engine import MirrorEngine, gst_element_exists, gst_init
 class DlnaTsMirrorEngine(MirrorEngine):
     name = "dlnats"
     display_name = "DLNA Live-Stream"
+    # Schickt dem Gerät eine Video-URL – ohne Video-Wiedergabe sinnlos.
+    requires_feature = Feature.VIDEO
 
     def __init__(self, receiver, server, config, on_error=None) -> None:  # noqa: ANN001
         super().__init__(receiver, server, config, on_error)

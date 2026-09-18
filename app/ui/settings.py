@@ -47,7 +47,7 @@ class SettingsDialog(Adw.PreferencesDialog):
     # Gerätespezifisch: Spiegel-Engine + Videoqualität
     # ====================================================================
     def _build_device_section(self, page, receiver) -> None:  # noqa: ANN001
-        engines = engines_for_kind(receiver.kind)
+        engines = engines_for_kind(receiver.kind, receiver)
         if not engines:
             return  # Gerät kann nicht spiegeln -> keine Sektion
         info = receiver.info

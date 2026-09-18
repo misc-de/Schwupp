@@ -95,6 +95,22 @@
   </branding>
 
   <releases>
+    <release version="0.3.0" date="2026-09-18">
+      <description>
+        <p>Screen mirroring now works on AirPlay TVs — including sound — and Schwupp only offers what a device actually does.</p>
+        <p xml:lang="de">Bildschirmspiegelung funktioniert jetzt auf AirPlay-Fernsehern – samt Ton –, und Schwupp bietet nur noch an, was ein Gerät wirklich kann.</p>
+        <ul>
+          <li>AirPlay screen mirroring with picture and sound</li>
+          <li xml:lang="de">AirPlay-Bildschirmspiegelung mit Bild und Ton</li>
+          <li>Music plays on AirPlay TVs that refuse video</li>
+          <li xml:lang="de">Musik läuft auch auf AirPlay-Fernsehern, die Video ablehnen</li>
+          <li>Options a device cannot do are no longer shown</li>
+          <li xml:lang="de">Optionen, die ein Gerät nicht kann, werden nicht mehr angezeigt</li>
+          <li>Clear messages instead of silent failures</li>
+          <li xml:lang="de">Verständliche Meldungen statt stiller Fehlschläge</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-08-22">
       <description>
         <p>Screen mirroring now carries the system sound, and failures are reported in the app instead of the terminal.</p>

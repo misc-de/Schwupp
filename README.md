@@ -32,14 +32,21 @@ the fallback for unsupported locales).
 | Feature | Chromecast / Google TV | LG webOS (2024+) | AirPlay 2 (Hisense, Samsung …) |
 |---|---|---|---|
 | Automatic discovery | ✅ | ✅ | ✅ |
-| Local media files | ✅ | ✅ | ✅ |
-| YouTube | ✅ (TV's own app) | ✅ (TV's own app) | ✅ (as video stream, if the TV accepts video) |
-| Web videos | ✅ | ✅ | ✅ |
-| Play / pause / stop, volume | ✅ | ✅ | — (these TVs acknowledge the commands but ignore them) |
+| Music files | ✅ | ✅ | ✅ |
+| Video files | ✅ | ✅ | † |
+| YouTube | ✅ (TV's own app) | ✅ (TV's own app) | † (as a video stream) |
+| Web videos | ✅ | ✅ | † |
+| Play / pause / stop, volume | ✅ | ✅ | — |
 | Screen mirroring (native, < 1 s) | ✅ | ✅ | — |
-| Screen mirroring (AirPlay) | — | — | ✅ |
-| Screen mirroring (HLS) | ✅ | ✅ | ✅ |
+| Screen mirroring (AirPlay, with sound) | — | — | ✅ |
+| Screen mirroring (HLS) | ✅ | ✅ | † |
 | Sound while mirroring | ✅ | ✅ | ✅ |
+
+**†** depends on the individual TV. Many AirPlay sets take only audio and refuse
+every video request — including YouTube and HLS mirroring, which both arrive as a
+video URL. Schwupp finds this out on the first attempt and then stops offering what
+that device won't do, so you are not left guessing. Playback controls are not offered
+at all on AirPlay: these TVs acknowledge the commands and ignore them.
 
 Most TVs are found and connected automatically. Newer LG webOS TVs (≈2024 and later)
 work just like a Chromecast, including screen mirroring.
@@ -49,10 +56,9 @@ with the code shown on the TV the first time you connect; the pairing is stored,
 this happens only once. Screen mirroring uses a separate protocol and therefore asks
 for its own code once — see [Screen mirroring](#screen-mirroring) below.
 
-How much these TVs accept varies a lot, and their advertised capabilities are not
-to be trusted: the tested Hisense claims to support AirPlay video but refuses every
-playback request, while mirroring to it works fine. Schwupp says what a device
-actually does instead of leaving you guessing.
+Do not trust what these TVs advertise: the tested Hisense claims AirPlay video and
+refuses every playback request — yet mirroring to it works, with sound. On such a
+set, mirroring is how you get any moving picture there, YouTube included.
 
 ### Other TVs
 

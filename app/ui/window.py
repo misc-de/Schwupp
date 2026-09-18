@@ -200,7 +200,7 @@ class MainWindow(Adw.ApplicationWindow):
         grp_src = Adw.PreferencesGroup(title=t("window.cast_group"))
         # Nimmt das Gerät kein Bewegtbild an, steht der Grund und der Ausweg
         # direkt über den Optionen – statt dass man ihn durch Ausprobieren sucht.
-        if not video and engines_for_kind(receiver.kind):
+        if not video and engines_for_kind(receiver.kind, receiver):
             grp_src.set_description(t("window.video_via_mirror"))
         elif not video:
             grp_src.set_description(t("window.audio_only"))
@@ -217,7 +217,7 @@ class MainWindow(Adw.ApplicationWindow):
             row_file.connect("activated", self._choose_file)
             grp_src.add(row_file)
 
-        if engines_for_kind(receiver.kind):
+        if engines_for_kind(receiver.kind, receiver):
             self._mirror_row = Adw.ActionRow(title=t("window.mirror"),
                                              subtitle=self._mirror_subtitle(receiver))
             self._mirror_row.add_prefix(Gtk.Image.new_from_icon_name("video-display-symbolic"))
@@ -433,7 +433,7 @@ class MainWindow(Adw.ApplicationWindow):
     # ====================================================================
     # -- Engine-Auswahl / Spiegel-Beschreibung -------------------------------
     def _chosen_engine_name(self, receiver) -> str | None:  # noqa: ANN001
-        engines = engines_for_kind(receiver.kind)
+        engines = engines_for_kind(receiver.kind, receiver)
         if not engines:
             return None
         names = [e.name for e in engines]

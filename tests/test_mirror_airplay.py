@@ -118,3 +118,35 @@ def test_output_becomes_a_helpful_message(output, expected):
 
 def test_unknown_output_is_kept_verbatim():
     assert "seltsamer Fehler" in AirplayMirrorEngine._explain("seltsamer Fehler")
+
+
+# -- Auswahl der Spiegel-Wege ------------------------------------------------
+
+class _Recv:
+    kind = "airplay"
+
+    def __init__(self, video: bool):
+        self._video = video
+
+    def supports(self, feature):  # noqa: ANN001
+        from app.receivers.base import Feature
+        return self._video if feature == Feature.VIDEO else True
+
+
+def test_hls_is_dropped_when_a_device_takes_no_video(monkeypatch):
+    """HLS-Spiegelung schickt dem Gerät eine Video-URL – nimmt es die nicht an,
+    gehört der Weg nicht in die Auswahl."""
+    from app.mirror import engines_for_kind
+    names = [e.name for e in engines_for_kind("airplay", _Recv(video=False))]
+    assert names == ["airplay"]
+
+
+def test_hls_stays_for_devices_that_play_video():
+    from app.mirror import engines_for_kind
+    names = [e.name for e in engines_for_kind("airplay", _Recv(video=True))]
+    assert "hls" in names and "airplay" in names
+
+
+def test_without_a_receiver_nothing_is_filtered():
+    from app.mirror import engines_for_kind
+    assert [e.name for e in engines_for_kind("airplay")] == ["airplay", "hls"]

@@ -13,6 +13,7 @@ Die Basisklasse übernimmt alles, was für jede Engine gleich ist:
 from __future__ import annotations
 
 import contextlib
+import importlib
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -39,6 +40,10 @@ class MirrorEngine(ABC):
 
     name: str = "base"
     display_name: str = "Basis"
+    # Welche Geräte-Fähigkeit dieser Weg voraussetzt (None = keine). HLS und
+    # DLNA-Live schicken dem Gerät eine Video-URL – nimmt es die nicht an, ist
+    # der Weg dort sinnlos und wird gar nicht erst zur Auswahl gestellt.
+    requires_feature: str | None = None
 
     def __init__(self, receiver, server, config, on_error=None,
                  on_started=None) -> None:  # noqa: ANN001
@@ -183,19 +188,32 @@ def gst_init():
 
 # --- Registry ----------------------------------------------------------------
 
-def _registry() -> dict[str, type[MirrorEngine]]:
-    # Lazy-Import, damit fehlende optionale Abhängigkeiten nicht alles blockieren.
-    from .airplay import AirplayMirrorEngine
-    from .dlnats import DlnaTsMirrorEngine
-    from .hls import HlsMirrorEngine
-    from .native import NativeMirrorEngine
+# Reihenfolge = Vorzug in den Auswahllisten.
+_ENGINE_MODULES = (
+    ("native", "NativeMirrorEngine"),
+    ("airplay", "AirplayMirrorEngine"),
+    ("hls", "HlsMirrorEngine"),
+    ("dlnats", "DlnaTsMirrorEngine"),
+)
 
-    return {
-        NativeMirrorEngine.name: NativeMirrorEngine,
-        AirplayMirrorEngine.name: AirplayMirrorEngine,
-        HlsMirrorEngine.name: HlsMirrorEngine,
-        DlnaTsMirrorEngine.name: DlnaTsMirrorEngine,
-    }
+
+def _registry() -> dict[str, type[MirrorEngine]]:
+    """Verfügbare Engines, einzeln geladen.
+
+    Jede Engine wird für sich importiert: Fehlt einer eine Abhängigkeit (etwa
+    pychromecast für das native Cast-Streaming), fällt nur sie weg – vorher riss
+    ein solcher Importfehler alle anderen Wege mit, obwohl sie nutzbar wären.
+    """
+    registry: dict[str, type[MirrorEngine]] = {}
+    for module_name, class_name in _ENGINE_MODULES:
+        try:
+            module = importlib.import_module(f".{module_name}", __package__)
+        except Exception:  # noqa: BLE001
+            continue
+        cls = getattr(module, class_name, None)
+        if cls is not None:
+            registry[cls.name] = cls
+    return registry
 
 
 def get_engine_class(name: str) -> type[MirrorEngine]:
@@ -228,12 +246,21 @@ _KIND_ENGINES: dict[str, tuple[str, ...]] = {
 }
 
 
-def engines_for_kind(kind: str) -> list[EngineInfo]:
-    """Engines, die für ein Gerät dieses Typs in Frage kommen (mit Status)."""
+def engines_for_kind(kind: str, receiver=None) -> list[EngineInfo]:  # noqa: ANN001
+    """Engines, die für ein Gerät dieses Typs in Frage kommen (mit Status).
+
+    Ist *receiver* bekannt, fallen Wege heraus, deren Voraussetzung das Gerät
+    nicht erfüllt – etwa HLS auf einem Fernseher, der keine Video-URLs annimmt.
+    """
     reg = _registry()
     infos: list[EngineInfo] = []
     for name in _KIND_ENGINES.get(kind, ()):
-        cls = reg[name]
+        cls = reg.get(name)
+        if cls is None:      # Abhängigkeit fehlt – Weg steht hier nicht zur Wahl
+            continue
+        required = cls.requires_feature
+        if required and receiver is not None and not receiver.supports(required):
+            continue
         ok, detail = cls.check_available()
         infos.append(EngineInfo(name, cls.display_name, ok, detail))
     return infos
