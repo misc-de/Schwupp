@@ -83,8 +83,8 @@ jobs:
       - name: Container vorbereiten
         run: dbus-uuidgen > /etc/machine-id
 
-      # --disable-download beweist nebenbei, dass der Build offline durchläuft
-      # (Flathub-Anforderung): Alles muss aus den gepinnten Artefakten kommen.
+      # --disable-download beweist nebenbei, dass der Build offline durchläuft:
+      # Alles muss aus den gepinnten Artefakten kommen.
       # --disable-rofiles-fuse: Im Container gibt es kein nutzbares /dev/fuse –
       # dasselbe Hindernis wie auf dem FLX1 (siehe scripts/build-arch.sh).
       - name: Bauen

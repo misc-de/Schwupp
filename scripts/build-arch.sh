@@ -15,7 +15,6 @@ set -euo pipefail
 
 manifest="${1:-de.cais.Schwupp.yaml}"
 appid="$(basename "$manifest" .yaml)"
-appid="${appid%.flathub}"
 arch="$(flatpak --default-arch)"
 builddir=".flatpak-build/$arch"
 repo="${FP_REPO:-repo}"
