@@ -84,6 +84,10 @@ pip-modules:
 	@test -x $(FP_TOOLS)/venv/bin/python || { \
 		$(PYTHON) -m venv $(FP_TOOLS)/venv && \
 		$(FP_TOOLS)/venv/bin/pip -q install requirements-parser PyYAML; }
+	@test -f $(FP_TOOLS)/flatpak-pip-generator.py || curl -fsSL \
+		-o $(FP_TOOLS)/flatpak-pip-generator.py \
+		https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/pip/flatpak-pip-generator.py
+	@$(PYTHON) scripts/fix-pip-generator.py $(FP_TOOLS)/flatpak-pip-generator.py
 	@grep -v '^\#' requirements.txt | grep -v '^yt-dlp' | grep . > $(FP_TOOLS)/req.txt
 	$(FP_TOOLS)/venv/bin/python $(FP_TOOLS)/flatpak-pip-generator.py \
 		--runtime='org.gnome.Sdk//49' --requirements-file=$(FP_TOOLS)/req.txt \

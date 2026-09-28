@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.3.1" date="2026-09-28">
+      <description>
+        <p>Updated libraries, including pyatv 0.18 for AirPlay devices.</p>
+        <p xml:lang="de">Aktualisierte Bibliotheken, darunter pyatv 0.18 für AirPlay-Geräte.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-09-18">
       <description>
         <p>Screen mirroring now works on AirPlay TVs — including sound — and Schwupp only offers what a device actually does.</p>
