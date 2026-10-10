@@ -174,7 +174,8 @@ Schwupp stands on the shoulders of these projects:
 
 | Project | Used for | License |
 |---|---|---|
-| [pychromecast](https://github.com/home-assistant-libs/pychromecast) | Google Cast protocol (incl. bundled `casttube` for YouTube) | LGPL-2.1 |
+| [pychromecast](https://github.com/home-assistant-libs/pychromecast) | Google Cast protocol | LGPL-2.1 |
+| [casttube](https://github.com/ur1katz/casttube) | YouTube playback on Cast devices (bundled with pychromecast) | MIT |
 | [pywebostv](https://github.com/supersaiyanmode/PyWebOSTV) | LG webOS SSAP control | MIT |
 | [pyatv](https://github.com/postlund/pyatv) | AirPlay 2 pairing & playback (Hisense, Samsung …) | MIT |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | web video extraction (fallback) | Unlicense |
@@ -183,6 +184,8 @@ Schwupp stands on the shoulders of these projects:
 | [requests](https://github.com/psf/requests) | HTTP for the updater | Apache-2.0 |
 | [PyGObject](https://pygobject.gnome.org/) · [GTK4](https://gtk.org/) · [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) | the user interface | LGPL |
 | [GStreamer](https://gstreamer.freedesktop.org/) | screen capture & H.264 encoding | LGPL |
+| [PipeWire](https://pipewire.org/) · [xdg-desktop-portal](https://github.com/flatpak/xdg-desktop-portal) | Wayland screen capture (ScreenCast portal) | MIT / LGPL-2.1 |
+| [x264](https://www.videolan.org/developers/x264.html) · [OpenH264](https://github.com/cisco/openh264) | H.264 encoders used through GStreamer / wf-recorder | GPL-2.0 / BSD-2-Clause |
 | [doubletake](https://github.com/omarroth/doubletake) | AirPlay screen mirroring (the protocol pyatv does not speak) | LGPL-3.0 |
 | [wf-recorder](https://github.com/ammen99/wf-recorder) | Wayland capture where no screen-cast portal exists | MIT |
 
