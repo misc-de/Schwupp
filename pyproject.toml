@@ -53,6 +53,8 @@ include = ["app*"]
 "share/schwupp" = ["VERSION"]
 "share/schwupp/lang" = ["lang/de.json", "lang/en.json"]
 "share/applications" = ["data/de.cais.Schwupp.desktop"]
+# D-Bus startet Schwupp ohne Fenster, wenn eine Shell die Cast-Schnittstelle ruft
+"share/dbus-1/services" = ["data/de.cais.Schwupp.service"]
 "share/metainfo" = ["data/de.cais.Schwupp.metainfo.xml"]
 "share/icons/hicolor/256x256/apps" = ["data/icons/hicolor/256x256/apps/de.cais.Schwupp.png"]
 

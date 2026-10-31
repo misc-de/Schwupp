@@ -13,6 +13,7 @@ import contextlib
 import re
 import socket
 import time
+import urllib.parse
 import urllib.request
 from xml.sax.saxutils import escape
 
@@ -44,13 +45,34 @@ def _ssdp_locations(host: str, st: str, timeout: float = 3.0) -> list[str]:
     return locs
 
 
+def guess_controls(base: str) -> tuple[str, str] | None:
+    """Control-URLs eines Renderers ohne Dienstliste in der Beschreibung.
+
+    Manche Firmwares (Frontier-Silicon-Internetradios, etwa „Classic Stereo")
+    kündigen ihre Dienste per SSDP an, lassen sie in der Beschreibung aber weg.
+    Die üblichen Pfade funktionieren dort; ein harmloses GetTransportInfo
+    bestätigt sie, bevor wir ihnen trauen (wie in Emilia).
+    Liefert (AVTransport, RenderingControl) oder None.
+    """
+    avt = f"{base}/AVTransport/control"
+    probe = DlnaRenderer(urllib.parse.urlparse(base).hostname or "", control=avt)
+    try:
+        probe._soap("GetTransportInfo",  # noqa: SLF001
+                    f'<u:GetTransportInfo xmlns:u="{AVTRANSPORT}"><InstanceID>0</InstanceID>'
+                    "</u:GetTransportInfo>", timeout=4)
+    except OSError:
+        return None
+    return avt, f"{base}/RenderingControl/control"
+
+
 class DlnaRenderer:
     """AVTransport-Steuerung eines MediaRenderers an *host*."""
 
-    def __init__(self, host: str, control: str | None = None) -> None:
+    def __init__(self, host: str, control: str | None = None,
+                 rendering: str | None = None) -> None:
         self.host = host
         self._control: str | None = control   # AVTransport, bei Discovery oft bekannt
-        self._render_control: str | None = None  # RenderingControl (Lautstärke)
+        self._render_control: str | None = rendering  # RenderingControl (Lautstärke)
 
     def resolve(self) -> bool:
         """Ermittelt die Control-URLs via SSDP. True, wenn AVTransport gefunden."""
@@ -98,8 +120,17 @@ class DlnaRenderer:
         )
         return urllib.request.urlopen(req, timeout=timeout).read()
 
-    def play_url(self, url: str, mime: str, title: str = "Schwupp") -> None:
-        cls = "object.item.audioItem" if mime.startswith("audio") else "object.item.videoItem"
+    def play_url(self, url: str, mime: str, title: str = "Schwupp", *,
+                 live: bool = False, uri: str | None = None) -> None:
+        """Spielt *url*. *live* kennzeichnet einen endlosen Stream (Renderer
+        zeigen ihn als Radio und erwarten keine Dauer); *uri* ersetzt die URL im
+        Befehl, nicht in den Metadaten (Sonos-Radioschema)."""
+        if live and mime.startswith("audio"):
+            cls = "object.item.audioItem.audioBroadcast"
+        elif mime.startswith("audio"):
+            cls = "object.item.audioItem"
+        else:
+            cls = "object.item.videoItem"
         didl = (
             '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
             'xmlns:dc="http://purl.org/dc/elements/1.1/" '
@@ -111,7 +142,7 @@ class DlnaRenderer:
         self._soap(
             "SetAVTransportURI",
             f'<u:SetAVTransportURI xmlns:u="{AVTRANSPORT}"><InstanceID>0</InstanceID>'
-            f"<CurrentURI>{escape(url)}</CurrentURI>"
+            f"<CurrentURI>{escape(uri or url)}</CurrentURI>"
             f"<CurrentURIMetaData>{escape(didl)}</CurrentURIMetaData></u:SetAVTransportURI>",
         )
         time.sleep(0.5)

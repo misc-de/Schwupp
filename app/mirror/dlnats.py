@@ -27,8 +27,9 @@ class DlnaTsMirrorEngine(MirrorEngine):
     # Schickt dem Gerät eine Video-URL – ohne Video-Wiedergabe sinnlos.
     requires_feature = Feature.VIDEO
 
-    def __init__(self, receiver, server, config, on_error=None) -> None:  # noqa: ANN001
-        super().__init__(receiver, server, config, on_error)
+    def __init__(self, receiver, server, config, on_error=None,
+                 on_started=None) -> None:  # noqa: ANN001
+        super().__init__(receiver, server, config, on_error, on_started)
         self._pipeline = None
         self._Gst = None
         self._live = None

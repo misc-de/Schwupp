@@ -29,6 +29,7 @@ class Feature:
     MIRROR_NATIVE = "mirror_native"  # Low-Latency-Spiegeln (Cast-Streaming)
     MIRROR_DLNA_TS = "mirror_dlna_ts"  # Bildschirm via DLNA-Live-MPEG-TS (LG)
     MIRROR_AIRPLAY = "mirror_airplay"  # Bildschirm via AirPlay spiegeln (LG, später)
+    SOUND = "sound"               # den ganzen Systemton empfangen (speaker/)
     # alle Mirror-Wege (für GUI-Gating "kann spiegeln?")
     ANY_MIRROR = (MIRROR_HLS, MIRROR_NATIVE, MIRROR_DLNA_TS, MIRROR_AIRPLAY)
 
@@ -66,6 +67,11 @@ class Receiver(ABC):
     @abstractmethod
     def play_media(self, url: str, mime: str, *, title: str | None = None,
                    live: bool = False) -> None: ...
+
+    def play_live_audio(self, url: str, title: str) -> None:
+        """Endlosen MP3-Stream (Systemton) abspielen; Sonos braucht dafür ein
+        eigenes URL-Schema und überschreibt das."""
+        self.play_media(url, "audio/mpeg", title=title, live=True)
 
     def play_youtube(self, video_id: str) -> None:
         raise NotImplementedError("Dieses Gerät unterstützt kein YouTube-Casting")

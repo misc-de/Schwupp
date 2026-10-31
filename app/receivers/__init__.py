@@ -1,6 +1,7 @@
 """Geräte-Backends (Receiver): einheitliche Schnittstelle über Chromecast,
-LG webOS, AirPlay 2 (Hisense/VIDAA, Samsung, Sony, Apple TV …) und
-generisches DLNA (Samsung, Sony, Panasonic, Philips, Hisense …)."""
+LG webOS, AirPlay 2 (Hisense/VIDAA, Samsung, Sony, Apple TV …), generisches
+DLNA (Samsung, Sony, Panasonic, Philips, Hisense …), Sonos und
+AirPlay-Lautsprecher (RAOP, nur Systemton)."""
 from .base import Feature, Receiver  # noqa: F401
 
 
@@ -25,4 +26,12 @@ def create_receiver(info, context):  # noqa: ANN001
         from .dlna import DlnaReceiver
 
         return DlnaReceiver(info, context)
+    if info.kind == "sonos":
+        from .sonos import SonosReceiver
+
+        return SonosReceiver(info, context)
+    if info.kind == "raop":
+        from .raop import RaopReceiver
+
+        return RaopReceiver(info, context)
     raise ValueError(f"Unbekannter Receiver-Typ: {info.kind!r}")

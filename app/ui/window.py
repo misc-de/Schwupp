@@ -22,10 +22,13 @@ from ..mirror import engines_for_kind, get_engine_class  # noqa: E402
 from ..receivers import Feature, create_receiver  # noqa: E402
 from ..receivers.base import Context  # noqa: E402
 from ..sources import youtube  # noqa: E402
+from ..speaker import SoundCast, is_speaker  # noqa: E402
+from ..speaker import check_available as sound_available  # noqa: E402
 from .settings import SettingsDialog  # noqa: E402
 
 _KIND_ICON = {"chromecast": "video-display-symbolic", "webos": "tv-symbolic",
-              "airplay": "tv-symbolic", "dlna": "tv-symbolic"}
+              "airplay": "tv-symbolic", "dlna": "tv-symbolic",
+              "sonos": "audio-speakers-symbolic", "raop": "audio-speakers-symbolic"}
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -36,6 +39,8 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.receiver = None
         self.engine = None
+        self.sound: SoundCast | None = None
+        self._sound_btn = None
         self._mirror_btn = None
         self._mirror_row = None
         self._shared_file_url: str | None = None
@@ -53,6 +58,9 @@ class MainWindow(Adw.ApplicationWindow):
         self._context = Context(
             zconf=self._discovery.zconf, config=app.config, server=app.server
         )
+        # Spiegelt gerade die Shell (Schnellschalter), zeigt ein Balken das an
+        app.service.add_listener(self._update_service_banner)
+        self._update_service_banner()
         self.connect("close-request", self._on_close)
 
     # ====================================================================
@@ -66,6 +74,10 @@ class MainWindow(Adw.ApplicationWindow):
         settings_btn.set_tooltip_text(t("window.settings"))
         settings_btn.connect("clicked", self._open_settings)
         header.pack_end(settings_btn)
+        self._service_banner = Adw.Banner(button_label=t("window.stop"))
+        self._service_banner.connect("button-clicked",
+                                     lambda _b: self.app.service.stop_streaming())
+        toolbar.add_top_bar(self._service_banner)
 
         scroller = Gtk.ScrolledWindow(vexpand=True)
         clamp = Adw.Clamp(maximum_size=600, margin_top=12, margin_bottom=12,
@@ -106,6 +118,13 @@ class MainWindow(Adw.ApplicationWindow):
                             activatable=True)
         row.add_prefix(Gtk.Image.new_from_icon_name(
             _KIND_ICON.get(info.kind, "video-display-symbolic")))
+        # Auflösung, Bitrate, Ton … pro Gerät, ohne erst zu verbinden
+        if engines_for_kind(info.kind):
+            gear = Gtk.Button(icon_name="emblem-system-symbolic", valign=Gtk.Align.CENTER,
+                              tooltip_text=t("window.device_settings"))
+            gear.add_css_class("flat")
+            gear.connect("clicked", lambda _b, i=info: self.open_device_settings(i))
+            row.add_suffix(gear)
         row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
         row.connect("activated", lambda _r, i=info: self._connect(i))
         self._devices_group.add(row)
@@ -202,7 +221,7 @@ class MainWindow(Adw.ApplicationWindow):
         # direkt über den Optionen – statt dass man ihn durch Ausprobieren sucht.
         if not video and engines_for_kind(receiver.kind, receiver):
             grp_src.set_description(t("window.video_via_mirror"))
-        elif not video:
+        elif not video and not is_speaker(receiver.info):
             grp_src.set_description(t("window.audio_only"))
         box.append(grp_src)
         if receiver.supports(Feature.MEDIA):
@@ -228,6 +247,18 @@ class MainWindow(Adw.ApplicationWindow):
             grp_src.add(self._mirror_row)
         else:
             self._mirror_row = None
+
+        # Den ganzen Ton dieses Rechners hinschicken (Lautsprecher, Cast, Sonos …)
+        if receiver.supports(Feature.SOUND):
+            sound_row = Adw.ActionRow(title=t("window.sound"), subtitle=t("window.sound_sub"))
+            sound_row.add_prefix(Gtk.Image.new_from_icon_name("audio-speakers-symbolic"))
+            self._sound_btn = Gtk.Button(label=t("window.start"), valign=Gtk.Align.CENTER)
+            self._sound_btn.add_css_class("suggested-action")
+            self._sound_btn.connect("clicked", self._toggle_sound)
+            sound_row.add_suffix(self._sound_btn)
+            grp_src.add(sound_row)
+        else:
+            self._sound_btn = None
 
         # -- Link ------------------------------------------------------------
         # Links sind praktisch immer Bewegtbild (YouTube, Web-Videos); auf
@@ -372,6 +403,43 @@ class MainWindow(Adw.ApplicationWindow):
         self._toast(t("window.mirror_starting"))
         self.engine.start()
 
+    def _toggle_sound(self, _btn) -> None:  # noqa: ANN001
+        if self.sound is not None:
+            try:
+                self.sound.stop()
+            finally:
+                self.sound = None
+            self._set_sound_button(False)
+            self._toast(t("window.sound_stopped"))
+            return
+        ok, detail = sound_available(self.receiver.kind)
+        if not ok:
+            self._toast(detail)
+            return
+        receiver = self.receiver
+
+        def failed(text: str) -> None:
+            def show() -> bool:
+                self.sound = None
+                self._set_sound_button(False)
+                self._toast(t("window.sound_failed", error=text))
+                return False
+            GLib.idle_add(show)
+
+        self.sound = SoundCast(receiver, self.app.server, on_error=failed,
+                               on_started=lambda: GLib.idle_add(
+                                   self._toast, t("window.sound_running", name=receiver.name)))
+        self._set_sound_button(True)
+        self._toast(t("window.sound_starting"))
+        self.sound.start()
+
+    def _set_sound_button(self, running: bool) -> None:
+        if self._sound_btn is None:
+            return
+        self._sound_btn.set_label(t("window.stop") if running else t("window.start"))
+        self._sound_btn.remove_css_class("suggested-action" if running else "destructive-action")
+        self._sound_btn.add_css_class("destructive-action" if running else "suggested-action")
+
     # -- Zustand des Spiegel-Knopfs ------------------------------------------
     def _mirror_active(self) -> None:
         if getattr(self, "_mirror_btn", None) is None:
@@ -418,12 +486,18 @@ class MainWindow(Adw.ApplicationWindow):
                 self.engine.stop()
             finally:
                 self.engine = None
+        if self.sound is not None:
+            try:
+                self.sound.stop()
+            finally:
+                self.sound = None
         self._release_file()
         if self.receiver is not None:
             self.receiver.disconnect()
             self.receiver = None
 
     def _on_close(self, _win) -> bool:  # noqa: ANN001
+        self.app.service.remove_listener(self._update_service_banner)
         self._cleanup_receiver()
         self._discovery.stop()
         return False
@@ -453,6 +527,29 @@ class MainWindow(Adw.ApplicationWindow):
         if self.receiver is not None:
             dialog.connect("closed", lambda *_: self._refresh_mirror_subtitle())
         dialog.present(self)
+
+    def open_device_settings(self, info: ReceiverInfo | None) -> None:
+        """Einstellungen eines Geräts, auch ohne Verbindung (None = allgemein).
+
+        Der Dialog braucht nur Typ, Name und Fähigkeiten des Geräts; die liefert
+        ein noch nicht verbundener Receiver.
+        """
+        if info is None or (self.receiver is not None and self.receiver.info.uuid == info.uuid):
+            self._open_settings(None)
+            return
+        dialog = SettingsDialog(self.app.config, receiver=create_receiver(info, self._context))
+        dialog.present(self)
+
+    def _update_service_banner(self) -> None:
+        service = self.app.service
+        active = service.active
+        if active is None:
+            self._service_banner.set_revealed(False)
+            return
+        key = "window.service_streaming" if service.state == "streaming" \
+            else "window.service_connecting"
+        self._service_banner.set_title(t(key, name=active.name))
+        self._service_banner.set_revealed(True)
 
     def _toast(self, text: str) -> bool:
         self._toasts.add_toast(Adw.Toast(title=text, timeout=3))

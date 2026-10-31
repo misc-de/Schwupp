@@ -16,7 +16,7 @@ import contextlib
 from ..dlna import DlnaRenderer
 from .base import Feature, Receiver
 
-_FEATURES = {Feature.MEDIA, Feature.VIDEO, Feature.PLAYBACK}
+_FEATURES = {Feature.MEDIA, Feature.VIDEO, Feature.PLAYBACK, Feature.SOUND}
 
 
 class DlnaReceiver(Receiver):
@@ -24,8 +24,14 @@ class DlnaReceiver(Receiver):
 
     def __init__(self, info, context) -> None:  # noqa: ANN001
         super().__init__(info, context)
-        control = info.raw if isinstance(info.raw, str) else None
-        self._dlna = DlnaRenderer(info.host, control=control)
+        raw = info.raw
+        if isinstance(raw, str):
+            self._dlna = DlnaRenderer(info.host, control=raw)
+        elif raw is not None and hasattr(raw, "avtransport"):   # discovery.DlnaInfo
+            self._dlna = DlnaRenderer(info.host, control=raw.avtransport,
+                                      rendering=raw.rendering)
+        else:
+            self._dlna = DlnaRenderer(info.host)
 
     # -- Verbindung -----------------------------------------------------------
     def connect(self, prompt_cb=None, pin_cb=None) -> None:  # noqa: ANN001
@@ -39,7 +45,7 @@ class DlnaReceiver(Receiver):
     # -- Inhalte --------------------------------------------------------------
     def play_media(self, url, mime, *, title=None, live=False) -> None:  # noqa: ANN001
         self._dlna.ensure_ready()
-        self._dlna.play_url(url, mime, title or "Schwupp")
+        self._dlna.play_url(url, mime, title or "Schwupp", live=live)
 
     # -- Steuerung ------------------------------------------------------------
     def play(self) -> None:

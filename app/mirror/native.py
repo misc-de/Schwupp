@@ -82,8 +82,9 @@ class NativeMirrorEngine(MirrorEngine):
     name = "native"
     display_name = "Nativ"
 
-    def __init__(self, receiver, server, config, on_error=None) -> None:  # noqa: ANN001
-        super().__init__(receiver, server, config, on_error)
+    def __init__(self, receiver, server, config, on_error=None,
+                 on_started=None) -> None:  # noqa: ANN001
+        super().__init__(receiver, server, config, on_error, on_started)
         self._pipeline = None
         self._audio_pipeline = None
         self._Gst = None

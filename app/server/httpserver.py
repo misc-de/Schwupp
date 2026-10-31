@@ -57,7 +57,8 @@ class LiveStream:
     ältesten Blöcke (Drop statt Blockieren), damit der Producer nie hängt.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, mime: str = "video/mp2t") -> None:
+        self.mime = mime
         self._consumers: list[queue.Queue] = []
         self._lock = threading.Lock()
 
@@ -156,10 +157,12 @@ class MediaServer:
                  client_host: str | None = None) -> tuple[str, LiveStream]:
         """Registriert einen Live-Stream und liefert (URL, LiveStream)."""
         token = secrets.token_urlsafe(12)
-        ls = LiveStream()
+        ls = LiveStream(mime)
         with self._lock:
             self._live[token] = ls
-        return f"{self.base_url(client_host)}/live/{token}", ls
+        # Lautsprecher erkennen MP3 oft erst an der Endung (Sonos, DLNA-Radios)
+        ext = ".mp3" if mime == "audio/mpeg" else ""
+        return f"{self.base_url(client_host)}/live/{token}{ext}", ls
 
     def remove_live(self, url_or_token: str) -> None:
         with self._lock:
@@ -254,16 +257,22 @@ class MediaServer:
                     return
                 self._serve_file(entry, head_only)
 
-            # -- Live-Stream (endloser MPEG-TS) -------------------------------
+            # -- Live-Stream (endloser MPEG-TS oder MP3) ----------------------
             def _serve_live(self, token: str, head_only: bool) -> None:
-                ls = server._lookup_live(token)
+                ls = server._lookup_live(_token_of(token))
                 if ls is None:
                     self.send_error(404)
                     return
                 self.close_connection = True
                 self.send_response(200)
-                self.send_header("Content-Type", "video/mp2t")
+                self.send_header("Content-Type", ls.mime)
                 self.send_header("Accept-Ranges", "none")
+                # Ohne Übertragungsmodus lehnen Samsung/LG den Stream ab; OP=00:
+                # nicht spulbar (wie in Emilia)
+                self.send_header("transferMode.dlna.org", "Streaming")
+                self.send_header("contentFeatures.dlna.org",
+                                 "DLNA.ORG_OP=00;DLNA.ORG_CI=0;"
+                                 "DLNA.ORG_FLAGS=01700000000000000000000000000000")
                 self.send_header("Connection", "close")  # Streamende = Verbindungsende
                 self.end_headers()
                 if head_only:

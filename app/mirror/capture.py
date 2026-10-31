@@ -46,8 +46,12 @@ _ENCODERS: dict[str, tuple[str, str]] = {
                  "bitrate={bitrate_bps} gop-size={fps}"),
     "vaapi": ("vaapih264enc",
               "vaapih264enc rate-control=cbr bitrate={bitrate_kbps} keyframe-period={fps}"),
+    # Ohne sequence_header_mode=1 liefert z. B. MediaTeks Encoder SPS/PPS als
+    # eigenen Puffer, GStreamer verwirft dabei das erste Schlüsselbild, und ohne
+    # i_frame_period kommt nie wieder eins – der Receiver bliebe schwarz.
     "v4l2": ("v4l2h264enc",
-             "v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate_bps}\""),
+             "v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate_bps},"
+             "h264_i_frame_period={fps},sequence_header_mode=1\""),
 }
 
 ENCODER_CHOICES = ("auto", *_ENCODERS)

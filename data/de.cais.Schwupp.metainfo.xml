@@ -95,6 +95,22 @@
   </branding>
 
   <releases>
+    <release version="0.4.0" date="2026-10-31">
+      <description>
+        <p>All sound of the device to speakers, mirroring from a shell quick setting, and settings per device straight from the list.</p>
+        <p xml:lang="de">Der ganze Ton des Geräts an Lautsprecher, Spiegeln aus einem Schnellschalter der Shell, und Einstellungen pro Gerät direkt aus der Liste.</p>
+        <ul>
+          <li>Send all sound to Cast speakers and groups, Sonos rooms, DLNA renderers and AirPlay speakers</li>
+          <li xml:lang="de">Den ganzen Ton an Cast-Lautsprecher und -Gruppen, Sonos-Räume, DLNA-Renderer und AirPlay-Lautsprecher senden</li>
+          <li>D-Bus interface for shells: device list, mirror and stop without opening Schwupp</li>
+          <li xml:lang="de">D-Bus-Schnittstelle für Shells: Geräteliste, Spiegeln und Beenden, ohne Schwupp zu öffnen</li>
+          <li>Resolution, bitrate and sound per device without connecting first</li>
+          <li xml:lang="de">Auflösung, Bitrate und Ton pro Gerät, ohne erst zu verbinden</li>
+          <li>Mirroring to Chromecast starts again (it failed right away in 0.3)</li>
+          <li xml:lang="de">Spiegeln auf Chromecast startet wieder (scheiterte in 0.3 sofort)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-09-28">
       <description>
         <p>Updated libraries, including pyatv 0.18 for AirPlay devices.</p>

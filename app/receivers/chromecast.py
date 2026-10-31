@@ -6,7 +6,7 @@ from .base import Feature, Receiver
 
 _FEATURES = {
     Feature.MEDIA, Feature.VIDEO, Feature.YOUTUBE, Feature.PLAYBACK, Feature.VOLUME,
-    Feature.MIRROR_HLS, Feature.MIRROR_NATIVE,
+    Feature.MIRROR_HLS, Feature.MIRROR_NATIVE, Feature.SOUND,
 }
 
 

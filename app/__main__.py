@@ -20,7 +20,11 @@ def main() -> int:
 
     from .ui.app import SchwuppApp
 
-    return SchwuppApp(missing_optional=missing_opt).run(sys.argv)
+    # ``--service``: ohne Fenster starten, nur die D-Bus-Schnittstelle zum
+    # Spiegeln (app/service.py). D-Bus startet die App so, wenn eine Shell sie
+    # ruft; GApplication kennt das als ``--gapplication-service``.
+    argv = ["--gapplication-service" if a == "--service" else a for a in sys.argv]
+    return SchwuppApp(missing_optional=missing_opt).run(argv)
 
 
 def _format(deps_list) -> str:  # noqa: ANN001

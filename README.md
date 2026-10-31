@@ -102,6 +102,8 @@ app/
   server/          local HTTP server (files w/ Range, HLS, live stream)
   sources/         YouTube / web video (yt-dlp)
   mirror/          pluggable mirror engines (native, hls, dlnats)
+  service.py       D-Bus interface for shell quick settings (no window)
+  speaker/         all sound of the device to Cast, Sonos, DLNA, AirPlay speakers
   paths.py         locates VERSION/lang (git checkout, prefix, Flatpak)
   updater.py       self-update (git pull or verified ZIP staging)
   ui/              GTK4/libadwaita interface (adaptive desktop/phone)
@@ -111,6 +113,48 @@ tests/             protocol, server and config tests — no TV required
 The GUI only talks to the `Receiver` interface; which actions appear is driven by
 `receiver.supports(...)`. Mirror engines share one base class that handles screen
 capture selection, the worker thread and error reporting back into the window.
+
+## Sound to speakers
+
+Send **all sound of this device** to a speaker — music apps, videos, calls to the
+browser, everything. The device's own speakers go quiet meanwhile; the sound
+arrives 2–4 seconds later. Tap "Send sound here" on a device (or the speaker in
+the shell's list, see below).
+
+| Speaker | How the sound gets there |
+|---|---|
+| Chromecast, Nest and other Cast speakers, Cast groups | live MP3 stream (320 kbit/s) the speaker fetches |
+| Sonos (room groups as one, e.g. "Kitchen +1") | the same stream under Sonos' radio scheme `x-rincon-mp3radio://` |
+| DLNA/UPnP renderers | the same stream, announced as a broadcast |
+| AirPlay speakers (`_raop._tcp`) | PipeWire's RAOP sink (`pipewire-zeroconf`) |
+
+A virtual output becomes the default while the sound is sent; its name shows
+where the sound goes ("Schwupp → Kitchen"), and the volume keys set its level.
+Needs PipeWire (or PulseAudio) with `pactl`; AirPlay speakers need PipeWire's
+RAOP module and Avahi. The Sonos and DLNA handling comes from the author's
+[Emilia](https://github.com/misc-de/emilia).
+
+## Shell integration
+
+A shell can offer mirroring and sound without opening Schwupp — Phosh's cast
+quick setting on the Plinius does this: tap a TV in the list to mirror, a speaker
+to send the sound there, tap it again to stop.
+Schwupp exports `de.cais.Schwupp.Cast1` at `/de/cais/Schwupp/Cast` on its
+application bus name `de.cais.Schwupp`; when Schwupp is not running, D-Bus
+starts it without a window (`schwupp --service`), and it quits by itself 30 s
+after the last caller is done.
+
+| Member | |
+|---|---|
+| `StartDiscovery()` / `StopDiscovery()` | search while a caller holds it (ends when the caller leaves the bus) |
+| `Connect(s id)` / `Disconnect()` | mirror to a TV or send the sound to a speaker from `Devices`, stop |
+| `SubmitPin(s pin)` | the code an AirPlay TV shows the first time (`State` is `pin`) |
+| `OpenSettings(s id)` | open Schwupp with that device's settings (resolution, bitrate, sound …) |
+| `Devices` `a(ssss)` | id, name, description, icon name — TVs that can mirror and speakers (`audio-speakers-symbolic`) |
+| `ActiveDevice` `s`, `State` `s`, `Error` `s`, `Discovering` `b` | `State`: idle, connecting, pin, starting, streaming |
+
+The settings stay per device in Schwupp: the gear next to a device in the list
+opens them without connecting first.
 
 ## Installation
 
@@ -188,6 +232,8 @@ Schwupp stands on the shoulders of these projects:
 | [x264](https://www.videolan.org/developers/x264.html) · [OpenH264](https://github.com/cisco/openh264) | H.264 encoders used through GStreamer / wf-recorder | GPL-2.0 / BSD-2-Clause |
 | [doubletake](https://github.com/omarroth/doubletake) | AirPlay screen mirroring (the protocol pyatv does not speak) | LGPL-3.0 |
 | [wf-recorder](https://github.com/ammen99/wf-recorder) | Wayland capture where no screen-cast portal exists | MIT |
+| [LAME](https://lame.sourceforge.io/) | MP3 encoding of the sound for speakers (through GStreamer) | LGPL-2.0 |
+| [Emilia](https://github.com/misc-de/emilia) | how Sonos, DLNA and Cast speakers take a live stream (ported to Python by the same author) | GPL-3.0-or-later |
 
 The native Cast-streaming wire format was derived from the public
 [Chromium Open Screen Library](https://chromium.googlesource.com/openscreen/) /
