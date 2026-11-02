@@ -90,3 +90,38 @@ def test_overrides_are_per_device(config):
     b = FakeInfo(uuid="cast:b", host="10.0.0.2")
     config.set_device_value_for(a, "mirror_bitrate_kbps", 2000)
     assert config.device_value_for(b, "mirror_bitrate_kbps") == 6000
+
+
+@dataclass
+class FakeReceiverInfo:
+    uuid: str
+    host: str
+    name: str = "Wohnzimmer"
+    kind: str = "chromecast"
+    model: str = "Chromecast"
+
+
+def test_defaults_are_not_shared_between_instances(config):
+    config.set_device_value("cast:a", "mirror_fps", 60)
+    config.remember_device(FakeReceiverInfo("cast:a", "10.0.0.2"))
+    other = Config()          # nichts gespeichert: wieder die reinen Defaults
+    assert other["device_overrides"] == {}
+    assert other["known_devices"] == {}
+
+
+def test_reset_device_values_removes_all_keys(config):
+    info = FakeReceiverInfo("cast:abc", "10.0.0.2")
+    config.set_device_value_for(info, "mirror_fps", 60)
+    assert config.has_device_values(info)
+    config.reset_device_values(info)
+    assert not config.has_device_values(info)
+    assert config.device_value_for(info, "mirror_fps") == 30
+
+
+def test_remember_and_forget_device(config):
+    info = FakeReceiverInfo("cast:abc", "10.0.0.2")
+    assert config.remember_device(info) is True
+    assert config.remember_device(info) is False
+    assert config["known_devices"]["cast:abc"]["name"] == "Wohnzimmer"
+    config.forget_device("cast:abc")
+    assert "cast:abc" not in config["known_devices"]

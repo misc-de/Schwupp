@@ -95,6 +95,16 @@
   </branding>
 
   <releases>
+    <release version="0.5.0" date="2026-11-02">
+      <description>
+        <p>The settings of the TVs over D-Bus, for settings apps of the desktop.</p>
+        <p xml:lang="de">Die Einstellungen der Fernseher über D-Bus, für Einstellungs-Apps des Desktops.</p>
+        <ul>
+          <li>Defaults for all TVs and own values per TV, also for TVs that are not found right now</li>
+          <li xml:lang="de">Standardwerte für alle Fernseher und eigene Werte je Fernseher, auch für gerade nicht gefundene</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-10-31">
       <description>
         <p>All sound of the device to speakers, mirroring from a shell quick setting, and settings per device straight from the list.</p>

@@ -3,8 +3,11 @@
 Eine Shell (z. B. die Cast-Kachel von Phosh) zeigt Fernseher und Lautsprecher in
 einer Liste. Ein Tipp auf einen Fernseher spiegelt den Bildschirm, ein Tipp auf
 einen Lautsprecher schickt den ganzen Ton des Rechners dorthin (speaker/); ein
-zweiter Tipp beendet es. Die Einstellungen pro Gerät (Auflösung, Bitrate, Ton …)
-bleiben in der App – dieselbe Config, dieselben Engines, nur ohne Oberfläche.
+zweiter Tipp beendet es. Die Einstellungen (Standardwerte und pro Gerät:
+Auflösung, Bitrate, Ton …) lassen sich über ``GetSettings``/``SetSetting`` von
+außen lesen und ändern, etwa aus den GNOME-Einstellungen – dieselbe Config,
+dieselben Engines, nur ohne Fenster. Die Config bleibt so allein in diesem
+Prozess; niemand sonst schreibt die Datei, während der Dienst sie im Speicher hält.
 
 Die Schnittstelle hängt am Bus-Namen der App (``de.cais.Schwupp``), Objekt
 ``/de/cais/Schwupp/Cast``. Ohne laufende App startet D-Bus sie im Dienstmodus
@@ -25,9 +28,11 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
+from .config import DEVICE_KEYS  # noqa: E402
 from .discovery import Discovery, ReceiverInfo  # noqa: E402
 from .i18n import t  # noqa: E402
 from .mirror import engines_for_kind, get_engine_class  # noqa: E402
+from .mirror.capture import ENCODER_CHOICES, available_encoders  # noqa: E402
 from .receivers import create_receiver  # noqa: E402
 from .receivers.base import Context  # noqa: E402
 from .speaker import SoundCast, is_speaker  # noqa: E402
@@ -51,6 +56,27 @@ _XML = f"""
     <method name="OpenSettings">
       <arg name="id" type="s" direction="in"/>
     </method>
+    <!-- Einstellungen eines Geräts, id "" = Standardwerte für alle Geräte.
+         Schlüssel: die Werte aus config.DEVICE_KEYS, dazu "name", "kind",
+         "custom" (b, eigene Werte), "engines" (a(ssbs): Name, Anzeige,
+         verfügbar, Grund), "encoders" (as), "resolutions" (ai) -->
+    <method name="GetSettings">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="settings" type="a{{sv}}" direction="out"/>
+    </method>
+    <method name="SetSetting">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="key" type="s" direction="in"/>
+      <arg name="value" type="v" direction="in"/>
+    </method>
+    <!-- Eigene Werte des Geräts löschen, es gelten wieder die Standardwerte -->
+    <method name="ResetDevice">
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <!-- Gerät samt eigenen Werten vergessen -->
+    <method name="ForgetDevice">
+      <arg name="id" type="s" direction="in"/>
+    </method>
     <!-- (id, Name, Beschreibung, Symbolname) je Gerät, das spiegeln kann -->
     <property name="Devices" type="a(ssss)" access="read"/>
     <property name="ActiveDevice" type="s" access="read"/>
@@ -58,6 +84,9 @@ _XML = f"""
     <property name="State" type="s" access="read"/>
     <property name="Error" type="s" access="read"/>
     <property name="Discovering" type="b" access="read"/>
+    <!-- Fernseher mit Einstellungen oder schon einmal gespiegelt, auch wenn sie
+         gerade nicht gefunden werden: (id, Name, Beschreibung, Symbolname) -->
+    <property name="KnownDevices" type="a(ssss)" access="read"/>
   </interface>
 </node>
 """
@@ -68,6 +97,11 @@ SPEAKER_ICON = "audio-speakers-symbolic"
 
 # So lange wartet ein Verbindungsaufbau auf die PIN vom Fernseher.
 PIN_TIMEOUT_S = 180
+
+# Wählbare Zielhöhen (16:9) und Grenzen für SetSetting – wie im Einstellungs-Dialog
+RESOLUTIONS = (720, 1080, 2160)
+_INT_RANGES = {"mirror_bitrate_kbps": (1000, 20000), "mirror_fps": (10, 60),
+               "mirror_target_delay_ms": (0, 2000)}
 
 
 def can_mirror(info: ReceiverInfo) -> bool:
@@ -137,23 +171,28 @@ class CastService:
 
     def _on_method_call(self, _conn, sender, _path, _iface, method, params,  # noqa: ANN001
                         invocation) -> None:
+        args = params.unpack()
+        handlers = {
+            "StartDiscovery": lambda: self._hold_discovery(sender),
+            "StopDiscovery": lambda: self._release_discovery(sender),
+            "Connect": lambda: self.connect(args[0]),
+            "Disconnect": self.stop_streaming,
+            "SubmitPin": lambda: self.submit_pin(args[0]),
+            "OpenSettings": lambda: self.app.open_device_settings(self._devices.get(args[0])),
+            "GetSettings": lambda: GLib.Variant("(a{sv})", (self.get_settings(args[0]),)),
+            "SetSetting": lambda: self.set_setting(*args),
+            "ResetDevice": lambda: self.reset_device(args[0]),
+            "ForgetDevice": lambda: self.forget_device(args[0]),
+        }
         try:
-            if method == "StartDiscovery":
-                self._hold_discovery(sender)
-            elif method == "StopDiscovery":
-                self._release_discovery(sender)
-            elif method == "Connect":
-                self.connect(params.unpack()[0])
-            elif method == "Disconnect":
-                self.stop_streaming()
-            elif method == "SubmitPin":
-                self.submit_pin(params.unpack()[0])
-            elif method == "OpenSettings":
-                self.app.open_device_settings(self._devices.get(params.unpack()[0]))
+            result = handlers[method]()
         except LookupError as exc:
             invocation.return_dbus_error(f"{INTERFACE}.Error.NotFound", str(exc))
             return
-        invocation.return_value(None)
+        except ValueError as exc:
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", str(exc))
+            return
+        invocation.return_value(result if isinstance(result, GLib.Variant) else None)
 
     def _on_get_property(self, _conn, _sender, _path, _iface, name):  # noqa: ANN001
         return self._property(name)
@@ -173,6 +212,11 @@ class CastService:
             return GLib.Variant("s", self._error)
         if name == "Discovering":
             return GLib.Variant("b", self._discovery is not None)
+        if name == "KnownDevices":
+            rows = [(info.uuid, info.name, self._describe(info),
+                     _KIND_ICON.get(info.kind, "video-display-symbolic"))
+                    for info in sorted(self._known(), key=lambda i: i.name.lower())]
+            return GLib.Variant("a(ssss)", rows)
         return None
 
     def _changed(self, *names: str) -> None:
@@ -266,6 +310,115 @@ class CastService:
         return False
 
     # ====================================================================
+    # Einstellungen (für GNOME-Einstellungen u. a., ohne Fenster)
+    # ====================================================================
+    def _known(self) -> list[ReceiverInfo]:
+        """Gemerkte Fernseher als ReceiverInfo (ohne ``raw``)."""
+        infos = []
+        for uuid, entry in (self.app.config["known_devices"] or {}).items():
+            info = ReceiverInfo(kind=entry.get("kind", ""), uuid=uuid,
+                                name=entry.get("name") or uuid, host=entry.get("host", ""),
+                                port=0, model=entry.get("model", ""))
+            if engines_for_kind(info.kind):
+                infos.append(info)
+        return infos
+
+    def _info_for(self, dev_id: str) -> ReceiverInfo:
+        """Gefundenes, aktives oder gemerktes Gerät mit dieser id."""
+        if dev_id in self._devices:
+            return self._devices[dev_id]
+        if self._active is not None and self._active.uuid == dev_id:
+            return self._active
+        for info in self._known():
+            if info.uuid == dev_id:
+                return info
+        raise LookupError(t("service.unknown_device"))
+
+    def get_settings(self, dev_id: str) -> dict[str, GLib.Variant]:
+        cfg = self.app.config
+        if dev_id:
+            info = self._info_for(dev_id)
+            if not can_mirror(info):
+                raise LookupError(t("service.unknown_device"))
+            value = lambda key: cfg.device_value_for(info, key)  # noqa: E731
+        else:
+            info = None
+            value = lambda key: cfg[key]  # noqa: E731
+        out = {
+            "mirror_height": GLib.Variant("i", int(value("mirror_height"))),
+            "mirror_bitrate_kbps": GLib.Variant("i", int(value("mirror_bitrate_kbps"))),
+            "mirror_fps": GLib.Variant("i", int(value("mirror_fps"))),
+            "mirror_audio": GLib.Variant("b", bool(value("mirror_audio"))),
+            "mirror_encoder": GLib.Variant("s", str(value("mirror_encoder") or "auto")),
+            "encoders": GLib.Variant("as", available_encoders()),
+            "resolutions": GLib.Variant("ai", list(RESOLUTIONS)),
+        }
+        if info is not None:
+            engines = engines_for_kind(info.kind)
+            names = [e.name for e in engines]
+            chosen = value("mirror_engine")
+            out.update({
+                "name": GLib.Variant("s", info.name),
+                "kind": GLib.Variant("s", info.kind),
+                "description": GLib.Variant("s", self._describe(info)),
+                "custom": GLib.Variant("b", cfg.has_device_values(info)),
+                "mirror_engine": GLib.Variant("s", chosen if chosen in names else names[0]),
+                "engines": GLib.Variant("a(ssbs)", [(e.name, e.display_name, e.available,
+                                                     e.detail or "") for e in engines]),
+                "airplay_video": GLib.Variant("b", bool(value("airplay_video"))),
+            })
+        return out
+
+    @staticmethod
+    def _checked(key: str, value, engines: list[str] | None):  # noqa: ANN001, ANN205
+        """Wert für *key* prüfen und in den Config-Typ bringen (sonst ValueError)."""
+        def in_range(low: int, high: int):  # noqa: ANN202
+            return lambda v: isinstance(v, int) and not isinstance(v, bool) and low <= v <= high
+
+        valid = {
+            "mirror_height": lambda v: v in RESOLUTIONS and not isinstance(v, bool),
+            "mirror_audio": lambda v: isinstance(v, bool),
+            "airplay_video": lambda v: isinstance(v, bool),
+            "mirror_encoder": lambda v: v in ENCODER_CHOICES,
+            "mirror_engine": lambda v: engines is not None and v in engines,
+            "mirror_airplay_codec": lambda v: v in ("h264", "hevc"),
+            **{k: in_range(*r) for k, r in _INT_RANGES.items()},
+        }
+        check = valid.get(key)
+        if check is None or not check(value):
+            raise ValueError(f"{key}: {value!r}")
+        return value
+
+    def set_setting(self, dev_id: str, key: str, value) -> None:  # noqa: ANN001
+        cfg = self.app.config
+        if key not in DEVICE_KEYS:
+            raise ValueError(f"unknown key {key}")
+        if not dev_id:
+            if key in ("mirror_engine", "airplay_video"):
+                raise ValueError(f"{key} only exists per device")
+            cfg[key] = self._checked(key, value, None)
+            cfg.save()
+            return
+        info = self._info_for(dev_id)
+        engines = [e.name for e in engines_for_kind(info.kind)]
+        cfg.set_device_value_for(info, key, self._checked(key, value, engines))
+        cfg.remember_device(info)
+        cfg.save()
+        self._changed("KnownDevices")
+
+    def reset_device(self, dev_id: str) -> None:
+        info = self._info_for(dev_id)
+        self.app.config.reset_device_values(info)
+        self.app.config.save()
+
+    def forget_device(self, dev_id: str) -> None:
+        info = self._info_for(dev_id)
+        self.app.config.reset_device_values(info)
+        self.app.config.forget_device(info.uuid)
+        self.app.config.save()
+        self._changed("KnownDevices")
+
+    # ====================================================================
     # Spiegeln
     # ====================================================================
     def connect(self, uuid: str) -> None:
@@ -309,7 +462,10 @@ class CastService:
         if not ok:
             return self._failed(receiver, f"{cls.display_name}: {detail}")
         self.app.config["last_device_uuid"] = receiver.info.uuid
+        known_changed = self.app.config.remember_device(receiver.info)
         self.app.config.save()
+        if known_changed:
+            self._changed("KnownDevices")
         self.engine = cls(receiver, self.app.server, self.app.config,
                           on_error=lambda text: GLib.idle_add(self._failed, receiver, text),
                           on_started=lambda: GLib.idle_add(self._started, receiver))

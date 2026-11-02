@@ -150,11 +150,18 @@ after the last caller is done.
 | `Connect(s id)` / `Disconnect()` | mirror to a TV or send the sound to a speaker from `Devices`, stop |
 | `SubmitPin(s pin)` | the code an AirPlay TV shows the first time (`State` is `pin`) |
 | `OpenSettings(s id)` | open Schwupp with that device's settings (resolution, bitrate, sound …) |
+| `GetSettings(s id) → a{sv}` | the values of a TV (`""`: the defaults for all TVs) with the choices: `engines` `a(ssbs)`, `encoders` `as`, `resolutions` `ai`; per TV also `name`, `kind`, `custom` |
+| `SetSetting(s id, s key, v value)` | change one value (`mirror_height`, `mirror_bitrate_kbps`, `mirror_fps`, `mirror_audio`, `mirror_encoder`, per TV also `mirror_engine`, `airplay_video`); checked, `InvalidArgs` otherwise |
+| `ResetDevice(s id)` / `ForgetDevice(s id)` | back to the defaults / also drop it from `KnownDevices` |
 | `Devices` `a(ssss)` | id, name, description, icon name — TVs that can mirror and speakers (`audio-speakers-symbolic`) |
+| `KnownDevices` `a(ssss)` | TVs with own settings or mirrored before, also while they are not found |
 | `ActiveDevice` `s`, `State` `s`, `Error` `s`, `Discovering` `b` | `State`: idle, connecting, pin, starting, streaming |
 
 The settings stay per device in Schwupp: the gear next to a device in the list
-opens them without connecting first.
+opens them without connecting first. A settings app of the desktop can show the
+same values through `GetSettings`/`SetSetting` — on the Plinius they are on the
+"Streaming" page of GNOME Settings. The config stays in Schwupp's process this way;
+nothing else writes the file while the service holds it.
 
 ## Installation
 

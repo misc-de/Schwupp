@@ -1,6 +1,7 @@
 """Einfache, persistente Konfiguration (JSON unter XDG_CONFIG_HOME/schwupp)."""
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,11 @@ _DEFAULTS: dict[str, Any] = {
     # Gerätespezifische Overrides der DEVICE_KEYS je Geräte-UUID:
     #   {"cast:…": {"mirror_engine": "hls", "mirror_bitrate_kbps": 4000}}
     "device_overrides": {},
+    # Fernseher, für die es Einstellungen gibt oder die schon gespiegelt haben:
+    #   {"cast:…": {"name": "Wohnzimmer", "kind": "chromecast", "host": "…", "model": "…"}}
+    # Damit können Einstellungs-Oberflächen (GNOME-Einstellungen über D-Bus)
+    # ein Gerät auch zeigen, wenn es gerade nicht im Netz ist.
+    "known_devices": {},
 }
 
 # Diese Schlüssel sind pro Gerät überschreibbar; sonst gilt der globale Default.
@@ -86,7 +92,9 @@ class Config:
 
     def __init__(self) -> None:
         self._path = _config_path()
-        self._data: dict[str, Any] = dict(_DEFAULTS)
+        # Tiefe Kopie: setdefault() auf device_overrides/known_devices darf die
+        # Defaults selbst nicht verändern.
+        self._data: dict[str, Any] = copy.deepcopy(_DEFAULTS)
         self._load()
 
     def _load(self) -> None:
@@ -132,3 +140,28 @@ class Config:
         """Override unter allen :func:`device_keys` setzen (überlebt uuid-Wechsel)."""
         for dev_key in device_keys(info):
             self.set_device_value(dev_key, key, value)
+
+    def has_device_values(self, info: Any) -> bool:
+        """Gibt es für das Gerät eigene Werte (unter irgendeinem Geräte-Schlüssel)?"""
+        overrides = self._data.get("device_overrides") or {}
+        return any(overrides.get(k) for k in device_keys(info))
+
+    def reset_device_values(self, info: Any) -> None:
+        """Eigene Werte des Geräts löschen – danach gelten die globalen Defaults."""
+        overrides = self._data.get("device_overrides") or {}
+        for dev_key in device_keys(info):
+            overrides.pop(dev_key, None)
+
+    # -- Bekannte Geräte (für Einstellungen ohne laufende Suche) -------------
+    def remember_device(self, info: Any) -> bool:
+        """Gerät in ``known_devices`` merken; True, wenn sich etwas geändert hat."""
+        entry = {"name": info.name, "kind": info.kind,
+                 "host": info.host, "model": info.model or ""}
+        known = self._data.setdefault("known_devices", {})
+        if known.get(info.uuid) == entry:
+            return False
+        known[info.uuid] = entry
+        return True
+
+    def forget_device(self, uuid: str) -> None:
+        (self._data.get("known_devices") or {}).pop(uuid, None)
