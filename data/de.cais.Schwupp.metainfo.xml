@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.6.2" date="2026-11-23">
+      <description>
+        <p>Mirroring on Wayland shows more than the first frame: the screen's frames are timed by the pipeline instead of the system uptime.</p>
+        <p xml:lang="de">Spiegeln unter Wayland zeigt mehr als das erste Bild: Die Bilder bekommen ihre Zeit von der Pipeline statt von der Systemlaufzeit.</p>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-11-23">
       <description>
         <p>Mirroring on Wayland no longer stays black while the screen does not change, and works more than once per start.</p>

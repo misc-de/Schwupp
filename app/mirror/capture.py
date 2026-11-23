@@ -145,9 +145,16 @@ def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
     sonst steht das Portal ohne freien Puffer da und liefert nichts mehr.
     keepalive wirkt erst im Zustand PLAYING: Die Senke dahinter darf daher
     nicht auf ein Vorschaubild warten (``async=false``).
+
+    do-timestamp: xdg-desktop-portal-wlr stempelt die Bilder mit der Uhrzeit
+    seit dem Systemstart (CLOCK_MONOTONIC), pipewiresrc übernimmt das als PTS
+    und wartet dann, bis die Pipeline-Uhr – bei null gestartet – dort ankommt:
+    nach Stunden Laufzeit des Geräts kam nach dem ersten Bild keins mehr
+    (gemessen am Plinius: Wartezeit 4:48 h). Mit do-timestamp zählt der
+    Empfangszeitpunkt in der Pipeline.
     """
     return (
-        f"pipewiresrc fd={fd} path={node_id} always-copy=true "
+        f"pipewiresrc fd={fd} path={node_id} always-copy=true do-timestamp=true "
         f"keepalive-time={KEEPALIVE_MS} "
         f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
     )

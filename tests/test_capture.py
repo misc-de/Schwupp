@@ -72,6 +72,8 @@ def test_pipewire_source_wires_fd_and_node():
     # Ruhender Bildschirm: Portal-Puffer frei, letztes Bild wiederholen
     assert "always-copy=true" in desc
     assert f"keepalive-time={capture.KEEPALIVE_MS}" in desc
+    # Zeitstempel des Portals sind Systemlaufzeit: sonst wartet die Quelle Stunden
+    assert "do-timestamp=true" in desc
 
 
 def test_auto_prefers_a_hardware_encoder_over_openh264(monkeypatch):
