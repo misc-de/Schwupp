@@ -17,11 +17,22 @@ währenddessen, erscheint das Fenster im selben Prozess.
 
 Gesucht wird nur, solange ein Aufrufer ``StartDiscovery`` hält (Akku); fällt
 der Aufrufer vom Bus, endet seine Suche mit ihm.
+
+Desktop auf dem Fernseher (``ConnectDesktop``): Gibt es auf dem Rechner den
+Dienst ``plinius-desktop-cast.service`` (Plinius-Telefon, Paket plinius-desktop),
+startet Schwupp ihn vor dem Spiegeln. Er legt einen virtuellen Bildschirm mit
+Leiste an; Schwupp schreibt dessen Namen in den Einwilligungsstempel der
+Bildschirmauswahl (xdg-desktop-portal-wlr-plinius), die dann genau diesen
+Bildschirm teilt statt des Telefons. Endet das Spiegeln, endet der Dienst, und
+die Fenster kehren aufs Telefon zurück.
 """
 from __future__ import annotations
 
+import os
+import subprocess
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import gi
 
@@ -47,6 +58,11 @@ _XML = f"""
     <method name="StartDiscovery"/>
     <method name="StopDiscovery"/>
     <method name="Connect">
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <!-- Wie Connect, aber der Fernseher zeigt einen eigenen Desktop statt des
+         Telefonbildschirms (nur mit DesktopAvailable, nur Fernseher) -->
+    <method name="ConnectDesktop">
       <arg name="id" type="s" direction="in"/>
     </method>
     <method name="Disconnect"/>
@@ -87,6 +103,10 @@ _XML = f"""
     <!-- Fernseher mit Einstellungen oder schon einmal gespiegelt, auch wenn sie
          gerade nicht gefunden werden: (id, Name, Beschreibung, Symbolname) -->
     <property name="KnownDevices" type="a(ssss)" access="read"/>
+    <!-- Ob ConnectDesktop hier geht (plinius-desktop-cast.service vorhanden) -->
+    <property name="DesktopAvailable" type="b" access="read"/>
+    <!-- Was das aktive Gerät bekommt: "" (nichts), "screen" oder "desktop" -->
+    <property name="Source" type="s" access="read"/>
   </interface>
 </node>
 """
@@ -97,6 +117,60 @@ SPEAKER_ICON = "audio-speakers-symbolic"
 
 # So lange wartet ein Verbindungsaufbau auf die PIN vom Fernseher.
 PIN_TIMEOUT_S = 180
+
+# Desktop auf dem Fernseher (plinius-desktop)
+DESKTOP_UNIT = "plinius-desktop-cast.service"
+DESKTOP_UNIT_DIRS = ("/usr/lib/systemd/user", "/etc/systemd/user")
+# Bis der virtuelle Bildschirm steht (der Dienst meldet sich per sd_notify)
+DESKTOP_START_TIMEOUT_S = 30
+
+
+def _runtime_dir() -> Path:
+    return Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+
+
+def desktop_available() -> bool:
+    """Gibt es hier einen Desktop für den Fernseher?"""
+    return any(Path(d, DESKTOP_UNIT).is_file() for d in DESKTOP_UNIT_DIRS)
+
+
+def start_desktop() -> str:
+    """Startet den Desktop-Dienst und gibt den Namen seines Bildschirms zurück.
+
+    Blockiert bis zum Ende des Start-Jobs; läuft im Worker-Thread.
+    """
+    try:
+        result = subprocess.run(["systemctl", "--user", "start", DESKTOP_UNIT],
+                                capture_output=True, text=True,
+                                timeout=DESKTOP_START_TIMEOUT_S, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(str(exc)) from exc
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"systemctl: {result.returncode}")
+    try:
+        name = (_runtime_dir() / "plinius-desktop-screen" / "output").read_text().strip()
+    except OSError:
+        name = ""
+    if not name:
+        raise RuntimeError(t("service.no_desktop_screen"))
+    return name
+
+
+def stop_desktop() -> None:
+    """Beendet den Desktop-Dienst (wartet nicht darauf)."""
+    try:
+        subprocess.run(["systemctl", "--user", "stop", "--no-block", DESKTOP_UNIT],
+                       capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[service] Desktop ließ sich nicht beenden: {exc}")
+
+
+def write_consent(screen: str) -> None:
+    """Sagt der Bildschirmauswahl, welcher Bildschirm geteilt wird (gilt 15 s, einmal)."""
+    path = _runtime_dir() / "plinius-screencast-consent"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(screen)
 
 # Wählbare Zielhöhen (16:9) und Grenzen für SetSetting – wie im Einstellungs-Dialog
 RESOLUTIONS = (720, 1080, 2160)
@@ -146,6 +220,10 @@ class CastService:
         self._error = ""
         self._pin: str | None = None
         self._pin_event: threading.Event | None = None
+        # Desktop auf dem Fernseher: gewünscht, gestartet, Name des Bildschirms
+        self._desktop = False
+        self._desktop_started = False
+        self._desktop_screen = ""
         # Beobachter in der App (Fenster), gerufen bei jeder Zustandsänderung
         self._listeners: list[Callable[[], None]] = []
 
@@ -176,6 +254,7 @@ class CastService:
             "StartDiscovery": lambda: self._hold_discovery(sender),
             "StopDiscovery": lambda: self._release_discovery(sender),
             "Connect": lambda: self.connect(args[0]),
+            "ConnectDesktop": lambda: self.connect(args[0], desktop=True),
             "Disconnect": self.stop_streaming,
             "SubmitPin": lambda: self.submit_pin(args[0]),
             "OpenSettings": lambda: self.app.open_device_settings(self._devices.get(args[0])),
@@ -217,6 +296,11 @@ class CastService:
                      _KIND_ICON.get(info.kind, "video-display-symbolic"))
                     for info in sorted(self._known(), key=lambda i: i.name.lower())]
             return GLib.Variant("a(ssss)", rows)
+        if name == "DesktopAvailable":
+            return GLib.Variant("b", desktop_available())
+        if name == "Source":
+            source = "" if self._active is None else "desktop" if self._desktop else "screen"
+            return GLib.Variant("s", source)
         return None
 
     def _changed(self, *names: str) -> None:
@@ -421,25 +505,37 @@ class CastService:
     # ====================================================================
     # Spiegeln
     # ====================================================================
-    def connect(self, uuid: str) -> None:
+    def connect(self, uuid: str, desktop: bool = False) -> None:
         info = self._devices.get(uuid)
         if info is None and self._active is not None and self._active.uuid == uuid:
             info = self._active
         if info is None:
             raise LookupError(t("service.unknown_device"))
+        if desktop and (is_speaker(info) or not can_mirror(info) or not desktop_available()):
+            raise ValueError(t("service.no_desktop"))
         self.stop_streaming()
         self._active = info
+        self._desktop = desktop
         self._error = ""
         self._set_state("connecting")
-        self._changed("ActiveDevice", "Error", "Devices")
+        self._changed("ActiveDevice", "Error", "Devices", "Source")
 
         context = Context(zconf=self._discovery.zconf if self._discovery else None,
                           config=self.app.config, server=self.app.server)
         receiver = create_receiver(info, context)
         self.receiver = receiver
+        # Ab hier räumt stop_streaming den Desktop-Dienst ab
+        self._desktop_started = desktop
         self._update_hold()
 
         def work() -> None:
+            if desktop:
+                try:
+                    screen = start_desktop()
+                except Exception as exc:  # noqa: BLE001
+                    GLib.idle_add(self._failed, receiver, t("service.desktop_failed", error=exc))
+                    return
+                GLib.idle_add(self._desktop_ready, receiver, screen)
             try:
                 receiver.connect(prompt_cb=None, pin_cb=self._wait_for_pin)
             except Exception as exc:  # noqa: BLE001
@@ -448,6 +544,14 @@ class CastService:
             GLib.idle_add(self._connected, receiver)
 
         threading.Thread(target=work, daemon=True, name="schwupp-connect").start()
+
+    def _desktop_ready(self, receiver, screen: str) -> bool:  # noqa: ANN001
+        if receiver is self.receiver:
+            self._desktop_screen = screen
+        elif not self._desktop_started:
+            # Abgebrochen, während er startete: Niemand zeigt ihn mehr
+            stop_desktop()
+        return False
 
     def _connected(self, receiver) -> bool:  # noqa: ANN001
         if receiver is not self.receiver:
@@ -470,6 +574,12 @@ class CastService:
                           on_error=lambda text: GLib.idle_add(self._failed, receiver, text),
                           on_started=lambda: GLib.idle_add(self._started, receiver))
         self._set_state("starting")
+        if self._desktop:
+            # Die Bildschirmauswahl teilt diesen Bildschirm, nie ersatzweise das Telefon
+            try:
+                write_consent(self._desktop_screen)
+            except OSError as exc:
+                return self._failed(receiver, t("service.desktop_failed", error=exc))
         self.engine.start()
         return False
 
@@ -532,11 +642,17 @@ class CastService:
                 print(f"[service] Engine ließ sich nicht sauber stoppen: {exc}")
         if receiver is not None:
             threading.Thread(target=self._disconnect, args=(receiver,), daemon=True).start()
+        if self._desktop_started:
+            self._desktop_started = False
+            stop_desktop()
+        self._desktop_screen = ""
         if self._active is None and self._state == "idle":
+            self._desktop = False
             return
         self._active = None
+        self._desktop = False
         self._set_state("idle")
-        self._changed("ActiveDevice", "Devices")
+        self._changed("ActiveDevice", "Devices", "Source")
         self._update_hold()
         if not self._holders:
             self._stop_discovery()

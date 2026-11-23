@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.6.0" date="2026-11-23">
+      <description>
+        <p>A desktop of its own on the TV instead of the phone's screen, for shell quick settings.</p>
+        <p xml:lang="de">Ein eigener Desktop auf dem Fernseher statt des Telefonbildschirms, für Schnellschalter von Shells.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-11-02">
       <description>
         <p>The settings of the TVs over D-Bus, for settings apps of the desktop.</p>

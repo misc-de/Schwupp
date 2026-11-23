@@ -148,6 +148,7 @@ after the last caller is done.
 |---|---|
 | `StartDiscovery()` / `StopDiscovery()` | search while a caller holds it (ends when the caller leaves the bus) |
 | `Connect(s id)` / `Disconnect()` | mirror to a TV or send the sound to a speaker from `Devices`, stop |
+| `ConnectDesktop(s id)` | a TV shows a desktop of its own instead of the screen (only with `DesktopAvailable`, see below) |
 | `SubmitPin(s pin)` | the code an AirPlay TV shows the first time (`State` is `pin`) |
 | `OpenSettings(s id)` | open Schwupp with that device's settings (resolution, bitrate, sound …) |
 | `GetSettings(s id) → a{sv}` | the values of a TV (`""`: the defaults for all TVs) with the choices: `engines` `a(ssbs)`, `encoders` `as`, `resolutions` `ai`; per TV also `name`, `kind`, `custom` |
@@ -156,6 +157,15 @@ after the last caller is done.
 | `Devices` `a(ssss)` | id, name, description, icon name — TVs that can mirror and speakers (`audio-speakers-symbolic`) |
 | `KnownDevices` `a(ssss)` | TVs with own settings or mirrored before, also while they are not found |
 | `ActiveDevice` `s`, `State` `s`, `Error` `s`, `Discovering` `b` | `State`: idle, connecting, pin, starting, streaming |
+| `DesktopAvailable` `b`, `Source` `s` | whether `ConnectDesktop` works here; what the active device gets: `""`, `screen` or `desktop` |
+
+**Desktop on the TV.** Where the systemd user unit `plinius-desktop-cast.service`
+exists (the Plinius phone, package plinius-desktop), `ConnectDesktop` starts it
+first: it makes a virtual screen with a bar, and Schwupp writes that screen's
+name into the consent stamp of the screen chooser (xdg-desktop-portal-wlr-plinius),
+which then shares exactly that screen, never the phone's in its place. With a
+Bluetooth mouse and keyboard the TV is a desktop of its own; when mirroring
+ends, the unit stops and the windows go back to the phone.
 
 The settings stay per device in Schwupp: the gear next to a device in the list
 opens them without connecting first. A settings app of the desktop can show the
