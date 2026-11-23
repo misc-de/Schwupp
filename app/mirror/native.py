@@ -266,7 +266,8 @@ class NativeMirrorEngine(MirrorEngine):
             f"! {encoder} "
             f"! video/x-h264,profile=main,stream-format=byte-stream "
             f"! h264parse config-interval=-1 "
-            f"! appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true"
+            # async=false: nicht auf ein erstes Bild warten (siehe pipewire_source_desc)
+            f"! appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true async=false"
         )
         self._pipeline = Gst.parse_launch(desc)
         self._pipeline.get_by_name("sink").connect("new-sample", self._on_video_sample)

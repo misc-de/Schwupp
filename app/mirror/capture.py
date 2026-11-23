@@ -18,6 +18,7 @@ Monitor); Engines, die Audio übertragen können, fragen ihn separat ab.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import os
 import shutil
 import subprocess
@@ -34,24 +35,27 @@ def is_wayland() -> bool:
 
 # --- H.264-Encoder-Auswahl ---------------------------------------------------
 # Reihenfolge der Kandidaten. x264enc bleibt bewusst vorn: er ist auf allen
-# getesteten Geräten verifiziert. Die übrigen greifen, wo x264enc fehlt (z. B.
-# eine Runtime ohne gst-plugins-ugly) oder wenn per Config erzwungen.
+# getesteten Geräten verifiziert. Danach die Hardware-Encoder, openh264enc
+# zuletzt: Er kann nur Constrained Baseline, die native Cast-Engine verlangt
+# aber Main – mit ihm als Wahl von „auto“ blieb der Fernseher schwarz, wo
+# v4l2h264enc bereitstand (Plinius, 23.11.2026).
 _ENCODERS: dict[str, tuple[str, str]] = {
     # name: (GStreamer-Element, Parameter-Template mit {bitrate_kbps} und {fps})
     "x264": ("x264enc",
              "x264enc tune=zerolatency speed-preset=ultrafast "
              "bitrate={bitrate_kbps} key-int-max={fps}"),
+    "vaapi": ("vaapih264enc",
+              "vaapih264enc rate-control=cbr bitrate={bitrate_kbps} keyframe-period={fps}"),
+    # sequence_header_mode=0: SPS/PPS kommen zusammen mit dem Schlüsselbild. Mit 1
+    # liefert MediaTeks Encoder (Plinius) sie gar nicht mehr, h264parse verwirft
+    # dann jedes Bild als „broken/invalid nal“ (gemessen 23.11.2026). Ohne
+    # i_frame_period käme kein weiteres Schlüsselbild – der Receiver bliebe schwarz.
+    "v4l2": ("v4l2h264enc",
+             "v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate_bps},"
+             "h264_i_frame_period={fps},sequence_header_mode=0\""),
     "openh264": ("openh264enc",
                  "openh264enc usage-type=screen complexity=low rate-control=bitrate "
                  "bitrate={bitrate_bps} gop-size={fps}"),
-    "vaapi": ("vaapih264enc",
-              "vaapih264enc rate-control=cbr bitrate={bitrate_kbps} keyframe-period={fps}"),
-    # Ohne sequence_header_mode=1 liefert z. B. MediaTeks Encoder SPS/PPS als
-    # eigenen Puffer, GStreamer verwirft dabei das erste Schlüsselbild, und ohne
-    # i_frame_period kommt nie wieder eins – der Receiver bliebe schwarz.
-    "v4l2": ("v4l2h264enc",
-             "v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate_bps},"
-             "h264_i_frame_period={fps},sequence_header_mode=1\""),
 }
 
 ENCODER_CHOICES = ("auto", *_ENCODERS)
@@ -127,10 +131,24 @@ def x11_source_desc(fps: int = 30, show_pointer: bool = True) -> str:
     )
 
 
+# Wie oft pipewiresrc das letzte Bild wiederholt, solange sich nichts ändert
+KEEPALIVE_MS = 100
+
+
 def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
-    """GStreamer-Quellbeschreibung für eine Portal-PipeWire-FD."""
+    """GStreamer-Quellbeschreibung für eine Portal-PipeWire-FD.
+
+    Unter wlroots kommt ein neues Bild nur, wenn sich auf dem Bildschirm etwas
+    ändert. keepalive-time wiederholt das letzte, damit Encoder und Fernseher
+    auch bei ruhendem Bild weiterlaufen; always-copy gibt die (meist nur zwei)
+    Puffer des Portals sofort zurück, statt sie in videorate festzuhalten –
+    sonst steht das Portal ohne freien Puffer da und liefert nichts mehr.
+    keepalive wirkt erst im Zustand PLAYING: Die Senke dahinter darf daher
+    nicht auf ein Vorschaubild warten (``async=false``).
+    """
     return (
-        f"pipewiresrc fd={fd} path={node_id} "
+        f"pipewiresrc fd={fd} path={node_id} always-copy=true "
+        f"keepalive-time={KEEPALIVE_MS} "
         f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
     )
 
@@ -146,8 +164,13 @@ def x11_capture_available() -> bool:
 
 
 def wf_recorder_available() -> bool:
-    """True, wenn wf-recorder als Wayland-Capture-Fallback nutzbar ist."""
-    return shutil.which("wf-recorder") is not None
+    """True, wenn wf-recorder als Wayland-Capture-Fallback nutzbar ist.
+
+    Sein H.264 wird vor dem Neu-Kodieren mit avdec_h264 (gst-libav) entpackt;
+    fehlt der Decoder, scheitert der Weg erst beim Aufbau der Pipeline und
+    verdeckt den eigentlichen Fehler der Bildschirmfreigabe.
+    """
+    return shutil.which("wf-recorder") is not None and gst_element_exists("avdec_h264")
 
 
 def screencast_portal_available() -> bool:
@@ -183,6 +206,12 @@ def capture_available() -> tuple[bool, str]:
                    "fehlt (gst-plugins-good mit X11-Unterstützung)")
 
 
+# Tokens der Portal-Anfragen: eindeutig für den ganzen Prozess. Das Portal legt
+# Session und Request unter Pfaden aus Bus-Name und Token an; ein Dienst, der
+# mehrmals spiegelt, darf einen Token daher nie zweimal vergeben.
+_TOKENS = itertools.count(1)
+
+
 class PortalScreenCast:
     """Wayland-Bildschirmfreigabe über xdg-desktop-portal (ScreenCast).
 
@@ -204,11 +233,28 @@ class PortalScreenCast:
         self.fps = fps
         self._bus = None
         self._session_handle: str | None = None
-        self._token_counter = 0
+        self._done = False
 
     def _new_token(self, prefix: str) -> str:
-        self._token_counter += 1
-        return f"schwupp_{prefix}_{self._token_counter}"
+        return f"schwupp_{prefix}_{next(_TOKENS)}"
+
+    def close(self) -> None:
+        """Beendet die Freigabe beim Portal (mehrfach aufrufbar).
+
+        Ohne Close bleibt die Session bestehen, solange der Prozess lebt; das
+        Portal nimmt dann ihre Bildschirmaufnahme nicht zurück.
+        """
+        self._done = True        # späte Antworten nicht mehr melden
+        handle, self._session_handle = self._session_handle, None
+        if handle is None or self._bus is None:
+            return
+        try:
+            self._bus.call(
+                self.PORTAL_BUS, handle, "org.freedesktop.portal.Session", "Close",
+                None, None, self._Gio.DBusCallFlags.NONE, -1, None, None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[capture] Bildschirmfreigabe ließ sich nicht schließen: {exc}")
 
     def start(self, callback) -> None:  # noqa: ANN001
         """Startet den Portal-Handshake. *callback(fd:int|None, node_id_or_err)*."""
@@ -254,6 +300,8 @@ class PortalScreenCast:
         if response != 0:
             return self._fail("Bildschirmfreigabe abgebrochen")
         self._session_handle = results["session_handle"]
+        if self._done:
+            return self.close()  # inzwischen gestoppt: Session gleich wieder schließen
         self._select_sources()
 
     # -- Schritt 2: Quellen wählen -------------------------------------------
@@ -272,6 +320,8 @@ class PortalScreenCast:
         )
 
     def _on_sources_selected(self, response: int, results: dict) -> None:
+        if self._done:
+            return  # gestoppt, die Session ist schon geschlossen
         if response != 0:
             return self._fail("Quellenauswahl fehlgeschlagen")
         self._start_cast()
@@ -287,6 +337,8 @@ class PortalScreenCast:
         )
 
     def _on_started(self, response: int, results: dict) -> None:
+        if self._done:
+            return  # gestoppt, die Session ist schon geschlossen
         if response != 0:
             return self._fail("Start der Bildschirmfreigabe fehlgeschlagen")
         streams = results.get("streams")
@@ -488,3 +540,6 @@ class CaptureSelector:
         if self._wf is not None:
             self._wf.stop()
             self._wf = None
+        if self._portal is not None:
+            self._portal.close()
+            self._portal = None

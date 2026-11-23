@@ -21,7 +21,7 @@ def fake_elements(monkeypatch):
 
 def test_prefers_x264_when_everything_is_available(fake_elements):
     fake_elements("x264enc", "openh264enc", "vaapih264enc", "v4l2h264enc")
-    assert capture.available_encoders() == ["x264", "openh264", "vaapi", "v4l2"]
+    assert capture.available_encoders() == ["x264", "vaapi", "v4l2", "openh264"]
     assert capture.h264_encoder_desc(4000, 30).startswith("x264enc")
 
 
@@ -69,6 +69,24 @@ def test_pipewire_source_wires_fd_and_node():
     desc = capture.pipewire_source_desc(fd=11, node_id=42, fps=60)
     assert "pipewiresrc fd=11 path=42" in desc
     assert "framerate=60/1" in desc
+    # Ruhender Bildschirm: Portal-Puffer frei, letztes Bild wiederholen
+    assert "always-copy=true" in desc
+    assert f"keepalive-time={capture.KEEPALIVE_MS}" in desc
+
+
+def test_auto_prefers_a_hardware_encoder_over_openh264(monkeypatch):
+    """openh264enc kann kein Main-Profil – auto nimmt ihn nur, wenn sonst nichts da ist."""
+    monkeypatch.setattr(capture, "gst_element_exists",
+                        lambda e: e in ("openh264enc", "v4l2h264enc"))
+    assert capture.h264_encoder_desc(6000, 30).startswith("v4l2h264enc")
+
+
+def test_v4l2_encoder_sends_sps_pps_with_the_key_frame(monkeypatch):
+    """sequence_header_mode=1 ließ MediaTeks Encoder SPS/PPS weglassen: schwarzer Fernseher."""
+    monkeypatch.setattr(capture, "gst_element_exists", lambda e: e == "v4l2h264enc")
+    desc = capture.h264_encoder_desc(6000, 30, "v4l2")
+    assert "sequence_header_mode=0" in desc
+    assert "h264_i_frame_period=30" in desc
 
 
 # -- Auswahlkette -----------------------------------------------------------
@@ -153,11 +171,16 @@ def test_cancelled_selector_swallows_a_late_portal_callback(monkeypatch):
         def start(self, callback):
             pending["cb"] = callback
 
+        def close(self):
+            pending["closed"] = True
+
     monkeypatch.setattr(capture, "PortalScreenCast", SlowPortal)
     result = _run(selector)
     selector.stop()
     pending["cb"](7, 21)
     assert result == {}
+    assert pending["closed"]                 # die Freigabe endet beim Portal
+    selector.stop()                          # zweites Stoppen schadet nicht
 
 
 def test_restart_sync_rebuilds_x11_but_not_portal(monkeypatch):
@@ -177,3 +200,94 @@ def test_restart_sync_rebuilds_x11_but_not_portal(monkeypatch):
     monkeypatch.setattr(capture, "PortalScreenCast", FakePortal)
     _run(portal)
     assert portal.restart_sync() is None     # Freigabe muss neu bestätigt werden
+
+
+# --- Portal-Session: eindeutige Tokens, Close beim Stoppen -------------------
+
+class _FakeBus:
+    def __init__(self, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def call(self, bus, path, iface, method, *args):
+        if self.fail:
+            raise RuntimeError("bus weg")
+        self.calls.append((bus, path, iface, method))
+
+
+class _FakeGio:
+    class DBusCallFlags:
+        NONE = 0
+
+
+def _portal(handle="/org/freedesktop/portal/desktop/session/1_2/schwupp_session_2", bus=None):
+    portal = capture.PortalScreenCast(fps=30)
+    portal._bus = bus or _FakeBus()
+    portal._Gio = _FakeGio
+    portal._session_handle = handle
+    return portal
+
+
+def test_tokens_stay_unique_across_screencasts():
+    """Ein Dienst spiegelt mehrmals: das Portal lehnt einen schon benutzten Pfad ab."""
+    first, second = capture.PortalScreenCast(), capture.PortalScreenCast()
+    tokens = [first._new_token("session"), second._new_token("session"),
+              first._new_token("session")]
+    assert len(set(tokens)) == 3
+    assert all(t.startswith("schwupp_session_") for t in tokens)
+
+
+def test_close_ends_the_portal_session_once():
+    portal = _portal()
+    portal.close()
+    portal.close()
+    assert portal._bus.calls == [(
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop/session/1_2/schwupp_session_2",
+        "org.freedesktop.portal.Session", "Close")]
+
+
+def test_close_without_a_session_does_nothing():
+    portal = _portal(handle=None)
+    portal.close()
+    assert portal._bus.calls == []
+    capture.PortalScreenCast().close()       # noch nie gestartet: kein Bus
+
+
+def test_close_survives_a_vanished_portal(capsys):
+    portal = _portal(bus=_FakeBus(fail=True))
+    portal.close()
+    assert portal._session_handle is None
+    assert "bus weg" in capsys.readouterr().out
+
+
+def test_a_session_created_after_stop_is_closed_at_once():
+    portal = _portal(handle=None)
+    steps = []
+    portal._select_sources = lambda: steps.append("select")
+    portal.close()
+    portal._on_session_created(0, {"session_handle": "/s/late"})
+    assert steps == []
+    assert [c[1] for c in portal._bus.calls] == ["/s/late"]
+
+
+def test_answers_after_stop_are_ignored():
+    portal = _portal()
+    steps = []
+    portal._start_cast = lambda: steps.append("start")
+    portal._open_remote = lambda node: steps.append("remote")
+    portal.close()
+    portal._on_sources_selected(0, {})
+    portal._on_started(0, {"streams": [(5, {})]})
+    assert steps == []
+
+
+def test_wf_recorder_needs_the_h264_decoder(monkeypatch):
+    """Ohne avdec_h264 scheitert wf-recorder erst in der Pipeline und verdeckt den Portal-Fehler."""
+    monkeypatch.setattr(capture.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(capture, "gst_element_exists", lambda name: False)
+    assert not capture.wf_recorder_available()
+    monkeypatch.setattr(capture, "gst_element_exists", lambda name: name == "avdec_h264")
+    assert capture.wf_recorder_available()
+    monkeypatch.setattr(capture.shutil, "which", lambda name: None)
+    assert not capture.wf_recorder_available()

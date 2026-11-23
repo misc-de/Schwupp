@@ -75,7 +75,8 @@ class DlnaTsMirrorEngine(MirrorEngine):
             f"{source_desc} "
             f"! {encoder} "
             f"! h264parse ! mpegtsmux name=mux alignment=7 "
-            f"! appsink name=sink emit-signals=true sync=false max-buffers=16 drop=true"
+            # async=false: nicht auf ein erstes Bild warten (siehe pipewire_source_desc)
+            f"! appsink name=sink emit-signals=true sync=false max-buffers=16 drop=true async=false"
             f"{self._audio_branch()}"
         )
         self._pipeline = Gst.parse_launch(desc)

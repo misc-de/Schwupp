@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.6.1" date="2026-11-23">
+      <description>
+        <p>Mirroring on Wayland no longer stays black while the screen does not change, and works more than once per start.</p>
+        <p xml:lang="de">Spiegeln unter Wayland bleibt nicht mehr schwarz, solange sich auf dem Bildschirm nichts ändert, und klappt auch mehrmals hintereinander.</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-11-23">
       <description>
         <p>A desktop of its own on the TV instead of the phone's screen, for shell quick settings.</p>
