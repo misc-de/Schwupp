@@ -1,6 +1,8 @@
 """Encoder-Auswahl und Capture-Fallback-Kette (ohne echtes GStreamer)."""
 from __future__ import annotations
 
+import types
+
 import pytest
 
 from app.mirror import capture
@@ -77,6 +79,10 @@ def test_pipewire_source_wires_fd_and_node():
     assert "capssetter caps=video/x-raw,pixel-aspect-ratio=1/1" in desc
     # Gedrehtes Telefon -> Fernseher quer
     assert "videoflip video-direction=auto" in desc
+    # Kein videorate: Es hielt jedes Bild bis zum nächsten zurück (bis 200 ms zu Beginn einer
+    # Bewegung); die Bildrate steht nur noch in den Caps
+    assert "videorate" not in desc
+    assert "capssetter caps=video/x-raw,framerate=60/1" in desc
 
 
 def test_auto_prefers_a_hardware_encoder_over_openh264(monkeypatch):
@@ -92,6 +98,8 @@ def test_v4l2_encoder_sends_sps_pps_with_the_key_frame(monkeypatch):
     desc = capture.h264_encoder_desc(6000, 30, "v4l2")
     assert "sequence_header_mode=0" in desc
     assert "h264_i_frame_period=30" in desc
+    # Level 4.0 instead of the encoder's default 1.0 (a level for 176×144)
+    assert desc.endswith("! capsfilter caps=video/x-h264,level=(string)4")
     # Schwarz kam als Rot an, wenn der Encoder RGB selbst wandelte: immer NV12 davor
     assert desc.startswith("videoconvert ! video/x-raw,format=NV12 ! v4l2h264enc ")
 
@@ -389,3 +397,32 @@ def test_retime_drops_the_empty_pause_frame():
     capture.retime_portal_source(_Pipe(src), _ProbeGst)
     assert src.pad.probe(None, _Info(_Buf(corrupted=True))) == _ProbeGst.PadProbeReturn.DROP
     assert src.pad.probe(None, _Info(None)) == _ProbeGst.PadProbeReturn.OK
+
+
+# --- Ton für den Fernseher ---------------------------------------------------
+
+class _Run:
+    def __init__(self, sinks, default="hal_output", fail=False):
+        self.sinks, self.default, self.fail = sinks, default, fail
+
+    def __call__(self, cmd, **kw):
+        if self.fail:
+            raise OSError("kein pactl")
+        out = self.sinks if cmd[1:3] == ["list", "sinks"] else self.default + "\n"
+        return types.SimpleNamespace(stdout=out)
+
+
+def test_monitor_is_the_tv_sink_when_plinius_desktop_made_one(monkeypatch):
+    """Desktop auf dem TV mit Ton „Desktop“: nur der Fernseher hört ihn, das Telefon schweigt."""
+    monkeypatch.setattr(capture.subprocess, "run",
+                        _Run("0\thal_output\tmodule\n7\tplinius_tv\tmodule-null-sink\n"))
+    assert capture.default_monitor_device() == "plinius_tv.monitor"
+
+
+def test_monitor_follows_the_default_sink_otherwise(monkeypatch):
+    monkeypatch.setattr(capture.subprocess, "run", _Run("0\thal_output\n3\tplinius_tv_x\n"))
+    assert capture.default_monitor_device() == "hal_output.monitor"
+    monkeypatch.setattr(capture.subprocess, "run", _Run("", default=""))
+    assert capture.default_monitor_device() is None
+    monkeypatch.setattr(capture.subprocess, "run", _Run("", fail=True))
+    assert capture.default_monitor_device() is None

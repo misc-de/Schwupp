@@ -53,10 +53,14 @@ _ENCODERS: dict[str, tuple[str, str]] = {
     # i_frame_period käme kein weiteres Schlüsselbild – der Receiver bliebe schwarz.
     # NV12 davor: RGB nimmt der Encoder zwar auch, liest aber bei xRGB den
     # Füllwert als Rot – Schwarz kam als Rot an (gemessen am Plinius).
+    # Level 4.0 (1080p30) in den Caps dahinter: Ohne meldet MediaTeks Encoder
+    # Level 1.0, ein Wert für 176×144 (GStreamer handelt das Level aus, ein
+    # h264_level in extra-controls überschreibt es nicht).
     "v4l2": ("v4l2h264enc",
              "videoconvert ! video/x-raw,format=NV12 ! "
              "v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate_bps},"
-             "h264_i_frame_period={fps},sequence_header_mode=0\""),
+             "h264_i_frame_period={fps},sequence_header_mode=0\" "
+             "! capsfilter caps=video/x-h264,level=(string)4"),
     "openh264": ("openh264enc",
                  "openh264enc usage-type=screen complexity=low rate-control=bitrate "
                  "bitrate={bitrate_bps} gop-size={fps}"),
@@ -112,9 +116,19 @@ def audio_source_desc() -> str | None:
     return None
 
 
+# Ausgabe für den Fernseher, die plinius-desktop für seinen Desktop auf dem TV anlegt: Was dort
+# landet, hört nur der Fernseher (in den Einstellungen des Desktops „Desktop“ statt „Telefon“).
+TV_SINK = "plinius_tv"
+
+
 def default_monitor_device() -> str | None:
-    """Name des Monitor-Geräts der aktuellen Standard-Ausgabe (für pulsesrc)."""
+    """Name des Monitor-Geräts für pulsesrc: die TV-Ausgabe, wenn es sie gibt, sonst die
+    aktuelle Standard-Ausgabe."""
     try:
+        sinks = subprocess.run(["pactl", "list", "sinks", "short"], capture_output=True,
+                               text=True, timeout=3, check=False).stdout
+        if any(line.split("\t")[1:2] == [TV_SINK] for line in sinks.splitlines()):
+            return f"{TV_SINK}.monitor"
         out = subprocess.run(["pactl", "get-default-sink"], capture_output=True,
                              text=True, timeout=3, check=False)
         sink = out.stdout.strip()
@@ -165,7 +179,11 @@ def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
         # hängt die Drehung als Metadatum an, pipewiresrc macht daraus ein
         # image-orientation-Tag – videoflip dreht danach, der Fernseher zeigt quer
         f"! videoflip video-direction=auto "
-        f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
+        # Kein videorate: Es hält jedes Bild zurück, bis das nächste kommt, und genau zu
+        # Beginn einer Bewegung kam so bis zu 200 ms Verzögerung dazu (gemessen am Plinius:
+        # Median 53 → 29 ms, 90 % 148 → 31 ms). Die Bildrate in den Caps ist nur die Angabe
+        # für den Encoder; die Zeitstempel setzt retime_portal_source bzw. der Sender.
+        f"! videoconvert ! capssetter caps=video/x-raw,framerate={fps}/1"
     )
 
 

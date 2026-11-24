@@ -344,13 +344,16 @@ class NativeMirrorEngine(MirrorEngine):
         got = self._pull(sink)
         if got is None:
             return self._Gst.FlowReturn.OK
-        data, pts, is_key = got
+        data, _pts, is_key = got
         # Erst ab dem ersten Keyframe senden -> dieses wird Frame 0.
         if not self._video.started:
             if not is_key:
                 return self._Gst.FlowReturn.OK
             self._video.started = True
-        self._send_frame(self._video, data, is_key=is_key, pts_ns=pts)
+        # Zeitstempel = Sendezeitpunkt, nicht Aufnahme: Das Kodieren dauert mal 50, mal
+        # 200 ms; mit der Aufnahmezeit sähe der Receiver Bilder, die unregelmäßig zu spät
+        # kommen, und vergrößerte seinen Puffer auf den schlimmsten Fall (am Plinius ~1 s)
+        self._send_frame(self._video, data, is_key=is_key, pts_ns=time.monotonic_ns())
         return self._Gst.FlowReturn.OK
 
     def _on_audio_sample(self, sink):  # noqa: ANN001

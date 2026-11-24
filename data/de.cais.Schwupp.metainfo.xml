@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.6.4" date="2026-11-24">
+      <description>
+        <p>Less delay when mirroring with a hardware encoder: frames go to the encoder without waiting for the next one, carry a proper H.264 level and the send time. The desktop on a TV can have its own sound.</p>
+        <p xml:lang="de">Weniger Verzögerung beim Spiegeln mit Hardware-Encoder: Bilder gehen ohne Warten auf das nächste an den Encoder und tragen ein korrektes H.264-Level und den Sendezeitpunkt. Der Desktop auf dem Fernseher kann eigenen Ton haben.</p>
+      </description>
+    </release>
     <release version="0.6.3" date="2026-11-24">
       <description>
         <p>Mirroring on Wayland works with xdg-desktop-portal-wlr: frames are timed on arrival, keep their proportions and colours and turn with the device. Shell quick settings can play a YouTube link or a video file on a TV and see what each device offers.</p>
