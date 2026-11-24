@@ -2,7 +2,24 @@
 LG webOS, AirPlay 2 (Hisense/VIDAA, Samsung, Sony, Apple TV …), generisches
 DLNA (Samsung, Sony, Panasonic, Philips, Hisense …), Sonos und
 AirPlay-Lautsprecher (RAOP, nur Systemton)."""
+from importlib import import_module
+
 from .base import Feature, Receiver  # noqa: F401
+
+
+def static_features(kind: str) -> frozenset[str]:
+    """Was ein Gerät dieser Art kann, ohne Verbindung (für Schnellschalter).
+
+    Eigenschaften, die erst die Verbindung zeigt (AirPlay-Bewegtbild,
+    DLNA-Lautstärke), fehlen hier.
+    """
+    if kind == "raop":
+        return frozenset({Feature.SOUND})
+    try:
+        module = import_module(f".{kind}", __package__)
+    except ImportError:
+        return frozenset()
+    return frozenset(getattr(module, "_FEATURES", ()))
 
 
 def create_receiver(info, context):  # noqa: ANN001

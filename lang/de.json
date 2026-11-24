@@ -125,5 +125,15 @@
   "sound.missing_gst": "GStreamer-Elemente fehlen: {elements}",
   "sound.raop_ended": "Die AirPlay-Verbindung ist beendet",
   "sound.not_fetched": "Der Lautsprecher holt den Ton nicht ab",
-  "sound.gst_error": "Der Ton ließ sich nicht kodieren: {error}"
+  "sound.gst_error": "Der Ton ließ sich nicht kodieren: {error}",
+  "service.no_media": "Dieses Gerät kann keine Videos oder Links abspielen",
+  "service.no_file": "Unter {path} liegt keine Videodatei",
+  "service.no_link": "Das ist kein Web-Link (https://…)",
+  "service.play_failed": "Abspielen fehlgeschlagen: {error}",
+  "service.inhibit_media": "Spielt ein Video auf {name}",
+  "service.choose_video": "Video für {name}",
+  "service.link_heading": "Link abspielen",
+  "service.link_body": "Ein YouTube-Link oder ein Link zu einem Video im Netz, abgespielt auf {name}.",
+  "service.cancel": "Abbrechen",
+  "service.play": "Abspielen"
 }

@@ -25,9 +25,15 @@ Leiste an; Schwupp schreibt dessen Namen in den Einwilligungsstempel der
 Bildschirmauswahl (xdg-desktop-portal-wlr-plinius), die dann genau diesen
 Bildschirm teilt statt des Telefons. Endet das Spiegeln, endet der Dienst, und
 die Fenster kehren aufs Telefon zurück.
+
+Videos und Links (``PlayFile``, ``PlayLink``; ``ChooseFile`` und ``ChooseLink``
+fragen selbst nach Datei bzw. Link): Das Gerät spielt eine Datei dieses
+Rechners (über Schwupps Medienserver) oder einen Link – YouTube in der
+YouTube-App des Geräts, sonst über yt-dlp. ``Actions`` sagt je Gerät, was geht.
 """
 from __future__ import annotations
 
+import mimetypes
 import os
 import subprocess
 import threading
@@ -37,15 +43,17 @@ from pathlib import Path
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gio, GLib, Gtk  # noqa: E402
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from .config import DEVICE_KEYS  # noqa: E402
 from .discovery import Discovery, ReceiverInfo  # noqa: E402
 from .i18n import t  # noqa: E402
 from .mirror import engines_for_kind, get_engine_class  # noqa: E402
 from .mirror.capture import ENCODER_CHOICES, available_encoders  # noqa: E402
-from .receivers import create_receiver  # noqa: E402
+from .receivers import Feature, create_receiver, static_features  # noqa: E402
 from .receivers.base import Context  # noqa: E402
+from .sources import youtube  # noqa: E402
 from .speaker import SoundCast, is_speaker  # noqa: E402
 from .speaker import check_available as sound_available  # noqa: E402
 
@@ -63,6 +71,23 @@ _XML = f"""
     <!-- Wie Connect, aber der Fernseher zeigt einen eigenen Desktop statt des
          Telefonbildschirms (nur mit DesktopAvailable, nur Fernseher) -->
     <method name="ConnectDesktop">
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <!-- Eine Videodatei dieses Rechners auf dem Gerät abspielen -->
+    <method name="PlayFile">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="path" type="s" direction="in"/>
+    </method>
+    <!-- Einen Link abspielen: YouTube in der YouTube-App des Geräts, sonst yt-dlp -->
+    <method name="PlayLink">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="url" type="s" direction="in"/>
+    </method>
+    <!-- Wie PlayFile/PlayLink, aber Schwupp fragt selbst nach Datei bzw. Link -->
+    <method name="ChooseFile">
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <method name="ChooseLink">
       <arg name="id" type="s" direction="in"/>
     </method>
     <method name="Disconnect"/>
@@ -105,8 +130,12 @@ _XML = f"""
     <property name="KnownDevices" type="a(ssss)" access="read"/>
     <!-- Ob ConnectDesktop hier geht (plinius-desktop-cast.service vorhanden) -->
     <property name="DesktopAvailable" type="b" access="read"/>
-    <!-- Was das aktive Gerät bekommt: "" (nichts), "screen" oder "desktop" -->
+    <!-- Was das aktive Gerät bekommt: "" (nichts), "screen", "desktop", "video"
+         (Datei) oder "link" -->
     <property name="Source" type="s" access="read"/>
+    <!-- Was je Gerät geht: id -> Auswahl aus "mirror", "youtube", "video", "desktop"
+         (in dieser Reihenfolge) -->
+    <property name="Actions" type="a{{sas}}" access="read"/>
   </interface>
 </node>
 """
@@ -189,6 +218,25 @@ def can_mirror(info: ReceiverInfo) -> bool:
     return bool(engines_for_kind(info.kind))
 
 
+def device_actions(info: ReceiverInfo) -> list[str]:
+    """Was ein Fernseher kann: "mirror", "youtube", "video", "desktop".
+
+    Lautsprecher bekommen nichts davon (dort gibt es nur den Ton).
+    """
+    if is_speaker(info) or not can_mirror(info):
+        return []
+    features = static_features(info.kind)
+    media_video = Feature.MEDIA in features and Feature.VIDEO in features
+    actions = ["mirror"]
+    if Feature.YOUTUBE in features or (media_video and youtube.yt_dlp_available()):
+        actions.append("youtube")
+    if media_video:
+        actions.append("video")
+    if desktop_available():
+        actions.append("desktop")
+    return actions
+
+
 def is_listed(info: ReceiverInfo) -> bool:
     """Fernseher zum Spiegeln oder Lautsprecher für den Ton."""
     return can_mirror(info) or is_speaker(info)
@@ -224,6 +272,9 @@ class CastService:
         self._desktop = False
         self._desktop_started = False
         self._desktop_screen = ""
+        # Was das aktive Gerät bekommt (Source) und die dafür freigegebene Datei
+        self._source = ""
+        self._shared_url: str | None = None
         # Beobachter in der App (Fenster), gerufen bei jeder Zustandsänderung
         self._listeners: list[Callable[[], None]] = []
 
@@ -255,6 +306,10 @@ class CastService:
             "StopDiscovery": lambda: self._release_discovery(sender),
             "Connect": lambda: self.connect(args[0]),
             "ConnectDesktop": lambda: self.connect(args[0], desktop=True),
+            "PlayFile": lambda: self.play(args[0], "video", args[1]),
+            "PlayLink": lambda: self.play(args[0], "link", args[1]),
+            "ChooseFile": lambda: self.choose_file(args[0]),
+            "ChooseLink": lambda: self.choose_link(args[0]),
             "Disconnect": self.stop_streaming,
             "SubmitPin": lambda: self.submit_pin(args[0]),
             "OpenSettings": lambda: self.app.open_device_settings(self._devices.get(args[0])),
@@ -299,11 +354,15 @@ class CastService:
         if name == "DesktopAvailable":
             return GLib.Variant("b", desktop_available())
         if name == "Source":
-            source = "" if self._active is None else "desktop" if self._desktop else "screen"
-            return GLib.Variant("s", source)
+            return GLib.Variant("s", self._source if self._active is not None else "")
+        if name == "Actions":
+            return GLib.Variant("a{sas}", {info.uuid: device_actions(info)
+                                           for info in self._listed()})
         return None
 
     def _changed(self, *names: str) -> None:
+        if "Devices" in names and "Actions" not in names:
+            names = (*names, "Actions")       # was geht, hängt an der Geräteliste
         if self._conn is not None:
             changed = {n: self._property(n) for n in names}
             self._conn.emit_signal(
@@ -516,6 +575,7 @@ class CastService:
         self.stop_streaming()
         self._active = info
         self._desktop = desktop
+        self._source = "desktop" if desktop else "screen"
         self._error = ""
         self._set_state("connecting")
         self._changed("ActiveDevice", "Error", "Devices", "Source")
@@ -595,6 +655,162 @@ class CastService:
         self.engine.start()
         return False
 
+    # ====================================================================
+    # Videos und Links
+    # ====================================================================
+    def _lookup(self, uuid: str) -> ReceiverInfo:
+        info = self._devices.get(uuid)
+        if info is None and self._active is not None and self._active.uuid == uuid:
+            info = self._active
+        if info is None:
+            raise LookupError(t("service.unknown_device"))
+        return info
+
+    def play(self, uuid: str, source: str, value: str) -> None:
+        """Spielt eine Datei (source "video") oder einen Link ("link") ab."""
+        info = self._lookup(uuid)
+        action = "video" if source == "video" else "youtube"
+        if action not in device_actions(info):
+            raise ValueError(t("service.no_media"))
+        value = value.strip()
+        if source == "video" and not os.path.isfile(value):
+            raise ValueError(t("service.no_file", path=value))
+        if source != "video" and not value.lower().startswith(("http://", "https://")):
+            raise ValueError(t("service.no_link"))
+        self.stop_streaming()
+        self._active = info
+        self._source = source
+        self._error = ""
+        self._set_state("connecting")
+        self._changed("ActiveDevice", "Error", "Devices", "Source")
+
+        context = Context(zconf=self._discovery.zconf if self._discovery else None,
+                          config=self.app.config, server=self.app.server)
+        receiver = create_receiver(info, context)
+        self.receiver = receiver
+        self._update_hold()
+
+        def work() -> None:
+            try:
+                receiver.connect(prompt_cb=None, pin_cb=self._wait_for_pin)
+                shared = self._play_on(receiver, source, value)
+            except Exception as exc:  # noqa: BLE001
+                GLib.idle_add(self._failed, receiver, t("service.play_failed", error=exc))
+                return
+            GLib.idle_add(self._media_started, receiver, shared)
+
+        threading.Thread(target=work, daemon=True, name="schwupp-play").start()
+
+    def _play_on(self, receiver, source: str, value: str) -> str | None:  # noqa: ANN001
+        """Startet die Wiedergabe (im Worker); gibt die freigegebene Datei-URL zurück."""
+        if source == "video":
+            url = self.app.server.add_file(value, client_host=receiver.host)
+            mime = mimetypes.guess_type(value)[0] or "video/mp4"
+            try:
+                receiver.play_media(url, mime, title=os.path.basename(value))
+            except Exception:
+                self.app.server.remove_file(url)
+                raise
+            return url
+        video_id = youtube.parse_video_id(value)
+        if video_id and receiver.supports(Feature.YOUTUBE):
+            receiver.play_youtube(video_id)
+        elif value.lower().split("?")[0].endswith((".mp4", ".webm", ".mkv", ".m3u8")):
+            receiver.play_media(value, mimetypes.guess_type(value)[0] or "video/mp4", title=value)
+        else:
+            stream = youtube.resolve_stream(value)
+            receiver.play_media(stream.url, stream.mime, title=stream.title)
+        return None
+
+    def _media_started(self, receiver, shared: str | None) -> bool:  # noqa: ANN001
+        if receiver is not self.receiver:
+            # Inzwischen abgebrochen: Die Datei ist nicht mehr gefragt
+            if shared:
+                self.app.server.remove_file(shared)
+            return False
+        self._shared_url = shared
+        self._set_state("streaming")
+        # Der Fernseher spielt selbst ab: Das Display darf aus, nur der Medienserver
+        # muss die Datei weiter liefern
+        if not self._inhibit:
+            self._inhibit = self.app.inhibit(None, Gtk.ApplicationInhibitFlags.SUSPEND,
+                                             t("service.inhibit_media", name=receiver.name))
+        return False
+
+    def choose_file(self, uuid: str) -> None:
+        """Fragt nach einer Videodatei und spielt sie auf dem Gerät ab."""
+        info = self._lookup(uuid)
+        if "video" not in device_actions(info):
+            raise ValueError(t("service.no_media"))
+        videos = Gtk.FileFilter()
+        videos.set_name(t("window.filter_media"))
+        videos.add_mime_type("video/*")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(videos)
+        dialog = Gtk.FileDialog(title=t("service.choose_video", name=info.name), filters=filters)
+        movies = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_VIDEOS)
+        if movies and os.path.isdir(movies):
+            dialog.set_initial_folder(Gio.File.new_for_path(movies))
+        self.app.hold()                  # im Dienstmodus nicht beenden, solange gefragt wird
+
+        def chosen(dlg, result) -> None:  # noqa: ANN001
+            self.app.release()
+            try:
+                path = dlg.open_finish(result).get_path()
+            except GLib.Error:
+                return                   # abgebrochen
+            self._play_chosen(uuid, "video", path or "")
+
+        dialog.open(None, None, chosen)
+
+    def choose_link(self, uuid: str) -> None:
+        """Fragt nach einem Link (vorbelegt aus der Zwischenablage) und spielt ihn ab."""
+        info = self._lookup(uuid)
+        if "youtube" not in device_actions(info):
+            raise ValueError(t("service.no_media"))
+        entry = Gtk.Entry(placeholder_text="https://youtu.be/…", activates_default=True,
+                          input_purpose=Gtk.InputPurpose.URL)
+        dialog = Adw.AlertDialog(heading=t("service.link_heading"),
+                                 body=t("service.link_body", name=info.name),
+                                 extra_child=entry)
+        dialog.add_response("cancel", t("service.cancel"))
+        dialog.add_response("play", t("service.play"))
+        dialog.set_response_appearance("play", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("play")
+        dialog.set_close_response("cancel")
+
+        def pasted(clipboard, result) -> None:  # noqa: ANN001
+            try:
+                text = (clipboard.read_text_finish(result) or "").strip()
+            except GLib.Error:
+                return
+            if text.lower().startswith(("http://", "https://")) and not entry.get_text():
+                entry.set_text(text)
+
+        def mapped(_entry) -> None:  # noqa: ANN001
+            # Unter Wayland gibt es die Zwischenablage erst mit sichtbarem Fenster
+            display = Gdk.Display.get_default()
+            if display is not None:
+                display.get_clipboard().read_text_async(None, pasted)
+
+        def answered(_dialog, response: str) -> None:  # noqa: ANN001
+            self.app.release()
+            if response == "play":
+                self._play_chosen(uuid, "link", entry.get_text())
+
+        entry.connect("map", mapped)
+        dialog.connect("response", answered)
+        self.app.hold()
+        dialog.present(None)
+
+    def _play_chosen(self, uuid: str, source: str, value: str) -> None:
+        """Nach einer Auswahl: abspielen, Fehler in Error statt als D-Bus-Antwort."""
+        try:
+            self.play(uuid, source, value)
+        except (LookupError, ValueError) as exc:
+            self._error = str(exc)
+            self._changed("Error")
+
     def _engine_name(self, receiver) -> str | None:  # noqa: ANN001
         """Die für das Gerät gewählte Engine (sonst die erste passende)."""
         engines = engines_for_kind(receiver.kind, receiver)
@@ -635,22 +851,30 @@ class CastService:
             self._inhibit = 0
         engine, self.engine = self.engine, None
         receiver, self.receiver = self.receiver, None
+        media = self._source in ("video", "link")
         if engine is not None:
             try:
                 engine.stop()
             except Exception as exc:  # noqa: BLE001
                 print(f"[service] Engine ließ sich nicht sauber stoppen: {exc}")
         if receiver is not None:
-            threading.Thread(target=self._disconnect, args=(receiver,), daemon=True).start()
+            threading.Thread(target=self._disconnect, args=(receiver, media),
+                             daemon=True).start()
+        shared, self._shared_url = self._shared_url, None
+        if shared:
+            # Sonst bliebe die Datei bis zum Ende der App im Netz abrufbar
+            self.app.server.remove_file(shared)
         if self._desktop_started:
             self._desktop_started = False
             stop_desktop()
         self._desktop_screen = ""
         if self._active is None and self._state == "idle":
             self._desktop = False
+            self._source = ""
             return
         self._active = None
         self._desktop = False
+        self._source = ""
         self._set_state("idle")
         self._changed("ActiveDevice", "Devices", "Source")
         self._update_hold()
@@ -658,7 +882,13 @@ class CastService:
             self._stop_discovery()
 
     @staticmethod
-    def _disconnect(receiver) -> None:  # noqa: ANN001
+    def _disconnect(receiver, media: bool = False) -> None:  # noqa: ANN001
+        if media:
+            # Der Fernseher spielt selbst ab: Ohne stop liefe das Video weiter
+            try:
+                receiver.stop()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[service] Wiedergabe ließ sich nicht stoppen: {exc}")
         try:
             receiver.disconnect()
         except Exception as exc:  # noqa: BLE001

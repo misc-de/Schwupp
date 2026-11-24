@@ -125,5 +125,15 @@
   "sound.missing_gst": "GStreamer elements missing: {elements}",
   "sound.raop_ended": "The AirPlay connection ended",
   "sound.not_fetched": "The speaker does not fetch the sound",
-  "sound.gst_error": "The sound could not be encoded: {error}"
+  "sound.gst_error": "The sound could not be encoded: {error}",
+  "service.no_media": "This device cannot play videos or links",
+  "service.no_file": "There is no video file at {path}",
+  "service.no_link": "That is not a web link (https://…)",
+  "service.play_failed": "Playing failed: {error}",
+  "service.inhibit_media": "Plays a video on {name}",
+  "service.choose_video": "Video for {name}",
+  "service.link_heading": "Play a Link",
+  "service.link_body": "A YouTube link or a link to a video on the web, played on {name}.",
+  "service.cancel": "Cancel",
+  "service.play": "Play"
 }

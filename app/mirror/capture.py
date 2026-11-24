@@ -22,6 +22,7 @@ import itertools
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Callable
 
 from .engine import gst_element_exists
@@ -50,7 +51,10 @@ _ENCODERS: dict[str, tuple[str, str]] = {
     # liefert MediaTeks Encoder (Plinius) sie gar nicht mehr, h264parse verwirft
     # dann jedes Bild als „broken/invalid nal“ (gemessen 23.11.2026). Ohne
     # i_frame_period käme kein weiteres Schlüsselbild – der Receiver bliebe schwarz.
+    # NV12 davor: RGB nimmt der Encoder zwar auch, liest aber bei xRGB den
+    # Füllwert als Rot – Schwarz kam als Rot an (gemessen am Plinius).
     "v4l2": ("v4l2h264enc",
+             "videoconvert ! video/x-raw,format=NV12 ! "
              "v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate_bps},"
              "h264_i_frame_period={fps},sequence_header_mode=0\""),
     "openh264": ("openh264enc",
@@ -133,6 +137,8 @@ def x11_source_desc(fps: int = 30, show_pointer: bool = True) -> str:
 
 # Wie oft pipewiresrc das letzte Bild wiederholt, solange sich nichts ändert
 KEEPALIVE_MS = 100
+# Name der Portal-Quelle in der Pipeline (für retime_portal_source)
+PORTAL_SOURCE = "portalsrc"
 
 
 def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
@@ -146,18 +152,60 @@ def pipewire_source_desc(fd: int, node_id: int, fps: int = 30) -> str:
     keepalive wirkt erst im Zustand PLAYING: Die Senke dahinter darf daher
     nicht auf ein Vorschaubild warten (``async=false``).
 
-    do-timestamp: xdg-desktop-portal-wlr stempelt die Bilder mit der Uhrzeit
-    seit dem Systemstart (CLOCK_MONOTONIC), pipewiresrc übernimmt das als PTS
-    und wartet dann, bis die Pipeline-Uhr – bei null gestartet – dort ankommt:
-    nach Stunden Laufzeit des Geräts kam nach dem ersten Bild keins mehr
-    (gemessen am Plinius: Wartezeit 4:48 h). Mit do-timestamp zählt der
-    Empfangszeitpunkt in der Pipeline.
+    Die Quelle heißt :data:`PORTAL_SOURCE`; :func:`retime_portal_source` muss
+    nach dem Bauen der Pipeline laufen (Zeitstempel, siehe dort).
     """
     return (
-        f"pipewiresrc fd={fd} path={node_id} always-copy=true do-timestamp=true "
+        f"pipewiresrc fd={fd} path={node_id} name={PORTAL_SOURCE} always-copy=true "
         f"keepalive-time={KEEPALIVE_MS} "
+        # Das Portal meldet als Pixelseitenverhältnis 1/2147483647: videoscale
+        # zieht das Bild dann auf volle Breite, statt Ränder anzusetzen
+        f"! video/x-raw ! capssetter caps=video/x-raw,pixel-aspect-ratio=1/1 "
+        # Gedrehtes Telefon: Das Portal liefert das Bild weiter im Hochformat und
+        # hängt die Drehung als Metadatum an, pipewiresrc macht daraus ein
+        # image-orientation-Tag – videoflip dreht danach, der Fernseher zeigt quer
+        f"! videoflip video-direction=auto "
         f"! videoconvert ! videorate ! video/x-raw,framerate={fps}/1"
     )
+
+
+def retime_portal_source(pipeline, Gst) -> bool:  # noqa: ANN001
+    """Bilder der Portal-Quelle nach Ankunft stempeln statt nach dem Portal.
+
+    xdg-desktop-portal-wlr stempelt jedes Bild mit CLOCK_MONOTONIC, der
+    Laufzeit seit dem Systemstart. pipewiresrc übernimmt das als PTS und
+    wartet vor dem Weiterreichen, bis die bei null gestartete Pipeline-Uhr dort
+    ankommt – am Plinius nach Stunden Laufzeit ebenso viele Stunden: Auf das
+    erste Bild folgte keins mehr, der Fernseher blieb schwarz (do-timestamp
+    hilft nicht, es greift nur bei Bildern ohne Stempel).
+
+    Deshalb läuft die Pipeline ohne Uhr (nichts wartet; die Senke synchronisiert
+    beim Spiegeln ohnehin nicht), und eine Sonde an der Quelle setzt die Zeit ab
+    dem ersten Bild. Das leere Bild, das das Portal beim kurzen Pausieren
+    schickt (CORRUPTED), fällt dabei weg. Gibt False zurück, wenn die Pipeline
+    keine Portal-Quelle hat.
+    """
+    src = pipeline.get_by_name(PORTAL_SOURCE)
+    if src is None:
+        return False
+    pipeline.use_clock(None)
+    start: list[int] = []
+
+    def probe(_pad, info):  # noqa: ANN001, ANN202
+        buf = info.get_buffer()
+        if buf is None:
+            return Gst.PadProbeReturn.OK
+        if buf.has_flags(Gst.BufferFlags.CORRUPTED):
+            return Gst.PadProbeReturn.DROP
+        now = time.monotonic_ns()
+        if not start:
+            start.append(now)
+        buf.pts = now - start[0]
+        buf.dts = Gst.CLOCK_TIME_NONE
+        return Gst.PadProbeReturn.OK
+
+    src.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, probe)
+    return True
 
 
 def x11_capture_available() -> bool:

@@ -24,7 +24,7 @@ class _Pipeline(_Element):
         self.desc = desc
 
     def get_by_name(self, name):
-        return _Element()
+        return None if name == "portalsrc" else _Element()
 
     def get_bus(self):
         return _Element()

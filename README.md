@@ -149,6 +149,8 @@ after the last caller is done.
 | `StartDiscovery()` / `StopDiscovery()` | search while a caller holds it (ends when the caller leaves the bus) |
 | `Connect(s id)` / `Disconnect()` | mirror to a TV or send the sound to a speaker from `Devices`, stop |
 | `ConnectDesktop(s id)` | a TV shows a desktop of its own instead of the screen (only with `DesktopAvailable`, see below) |
+| `PlayFile(s id, s path)`, `PlayLink(s id, s url)` | a TV plays a video file of this computer, or a link: YouTube in the TV's YouTube app, other pages through yt-dlp |
+| `ChooseFile(s id)`, `ChooseLink(s id)` | the same, but Schwupp asks itself: a file dialog, or a field for the link filled from the clipboard |
 | `SubmitPin(s pin)` | the code an AirPlay TV shows the first time (`State` is `pin`) |
 | `OpenSettings(s id)` | open Schwupp with that device's settings (resolution, bitrate, sound …) |
 | `GetSettings(s id) → a{sv}` | the values of a TV (`""`: the defaults for all TVs) with the choices: `engines` `a(ssbs)`, `encoders` `as`, `resolutions` `ai`; per TV also `name`, `kind`, `custom` |
@@ -157,7 +159,8 @@ after the last caller is done.
 | `Devices` `a(ssss)` | id, name, description, icon name — TVs that can mirror and speakers (`audio-speakers-symbolic`) |
 | `KnownDevices` `a(ssss)` | TVs with own settings or mirrored before, also while they are not found |
 | `ActiveDevice` `s`, `State` `s`, `Error` `s`, `Discovering` `b` | `State`: idle, connecting, pin, starting, streaming |
-| `DesktopAvailable` `b`, `Source` `s` | whether `ConnectDesktop` works here; what the active device gets: `""`, `screen` or `desktop` |
+| `DesktopAvailable` `b`, `Source` `s` | whether `ConnectDesktop` works here; what the active device gets: `""`, `screen`, `desktop`, `video` or `link` |
+| `Actions` `a{sas}` | per device what works: `mirror`, `youtube`, `video`, `desktop` (speakers: none) |
 
 **Desktop on the TV.** Where the systemd user unit `plinius-desktop-cast.service`
 exists (the Plinius phone, package plinius-desktop), `ConnectDesktop` starts it

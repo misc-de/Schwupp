@@ -17,7 +17,12 @@ from __future__ import annotations
 import contextlib
 
 from ..receivers.base import Feature
-from .capture import audio_source_desc, default_monitor_device, h264_encoder_desc
+from .capture import (
+    audio_source_desc,
+    default_monitor_device,
+    h264_encoder_desc,
+    retime_portal_source,
+)
 from .engine import MirrorEngine, gst_element_exists, gst_init
 
 
@@ -80,6 +85,7 @@ class DlnaTsMirrorEngine(MirrorEngine):
             f"{self._audio_branch()}"
         )
         self._pipeline = Gst.parse_launch(desc)
+        retime_portal_source(self._pipeline, Gst)
         sink = self._pipeline.get_by_name("sink")
         sink.connect("new-sample", self._on_sample)
 

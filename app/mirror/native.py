@@ -30,7 +30,12 @@ import socket
 import threading
 import time
 
-from .capture import audio_source_desc, default_monitor_device, h264_encoder_desc
+from .capture import (
+    audio_source_desc,
+    default_monitor_device,
+    h264_encoder_desc,
+    retime_portal_source,
+)
 from .cast_streaming import rtcp, rtp
 from .cast_streaming.control import (
     MIRRORING_APP_ID,
@@ -48,7 +53,6 @@ AUDIO_PT = 127
 VIDEO_CLOCK = 90000
 AUDIO_CLOCK = 48000
 TARGET_DELAY_MS = 150   # Playout-Puffer am Receiver
-AUDIO_TARGET_DELAY_MS = 150
 FREEZE_TIMEOUT_S = 4.0  # so lange ohne neues Frame = Capture eingefroren -> Neustart
 MAX_RECOVERIES = 5      # mehr Neustarts in 60 s -> aufgeben (Capture dauerhaft kaputt)
 RETAIN_FRAMES = 90      # Paketpuffer für Retransmits (~3 s bei 30 fps)
@@ -161,7 +165,9 @@ class NativeMirrorEngine(MirrorEngine):
             target_delay=target_delay)
         offer_audio = audio_stream(
             1, AUDIO_SSRC, self._key.hex(), self._iv.hex(),
-            target_delay=AUDIO_TARGET_DELAY_MS) if want_audio else None
+            # The receiver keeps the picture in step with the sound: a shorter buffer for
+            # the picture alone would gain nothing
+            target_delay=target_delay) if want_audio else None
 
         answer = None
         for attempt in range(3):  # Retry: erstes OFFER wird manchmal verschluckt
@@ -270,6 +276,7 @@ class NativeMirrorEngine(MirrorEngine):
             f"! appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true async=false"
         )
         self._pipeline = Gst.parse_launch(desc)
+        retime_portal_source(self._pipeline, Gst)
         self._pipeline.get_by_name("sink").connect("new-sample", self._on_video_sample)
         bus = self._pipeline.get_bus()
         bus.add_signal_watch()

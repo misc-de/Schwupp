@@ -72,15 +72,18 @@ def test_pipewire_source_wires_fd_and_node():
     # Ruhender Bildschirm: Portal-Puffer frei, letztes Bild wiederholen
     assert "always-copy=true" in desc
     assert f"keepalive-time={capture.KEEPALIVE_MS}" in desc
-    # Zeitstempel des Portals sind Systemlaufzeit: sonst wartet die Quelle Stunden
-    assert "do-timestamp=true" in desc
+    assert f" name={capture.PORTAL_SOURCE} " in desc
+    # Das Portal meldet ein unsinniges Pixelseitenverhältnis
+    assert "capssetter caps=video/x-raw,pixel-aspect-ratio=1/1" in desc
+    # Gedrehtes Telefon -> Fernseher quer
+    assert "videoflip video-direction=auto" in desc
 
 
 def test_auto_prefers_a_hardware_encoder_over_openh264(monkeypatch):
     """openh264enc kann kein Main-Profil – auto nimmt ihn nur, wenn sonst nichts da ist."""
     monkeypatch.setattr(capture, "gst_element_exists",
                         lambda e: e in ("openh264enc", "v4l2h264enc"))
-    assert capture.h264_encoder_desc(6000, 30).startswith("v4l2h264enc")
+    assert "v4l2h264enc " in capture.h264_encoder_desc(6000, 30)
 
 
 def test_v4l2_encoder_sends_sps_pps_with_the_key_frame(monkeypatch):
@@ -89,6 +92,8 @@ def test_v4l2_encoder_sends_sps_pps_with_the_key_frame(monkeypatch):
     desc = capture.h264_encoder_desc(6000, 30, "v4l2")
     assert "sequence_header_mode=0" in desc
     assert "h264_i_frame_period=30" in desc
+    # Schwarz kam als Rot an, wenn der Encoder RGB selbst wandelte: immer NV12 davor
+    assert desc.startswith("videoconvert ! video/x-raw,format=NV12 ! v4l2h264enc ")
 
 
 # -- Auswahlkette -----------------------------------------------------------
@@ -293,3 +298,94 @@ def test_wf_recorder_needs_the_h264_decoder(monkeypatch):
     assert capture.wf_recorder_available()
     monkeypatch.setattr(capture.shutil, "which", lambda name: None)
     assert not capture.wf_recorder_available()
+
+
+# --- Zeitstempel der Portal-Quelle -------------------------------------------
+
+class _ProbeGst:
+    CLOCK_TIME_NONE = 2**64 - 1
+
+    class PadProbeReturn:
+        OK = "ok"
+        DROP = "drop"
+
+    class PadProbeType:
+        BUFFER = "buffer"
+
+    class BufferFlags:
+        CORRUPTED = "corrupted"
+
+
+class _Buf:
+    def __init__(self, corrupted=False):
+        self.pts = 17_000_000_000_000      # Systemlaufzeit in ns, wie vom Portal
+        self.dts = 0
+        self.corrupted = corrupted
+
+    def has_flags(self, flag):
+        return self.corrupted and flag == _ProbeGst.BufferFlags.CORRUPTED
+
+
+class _Info:
+    def __init__(self, buf):
+        self.buf = buf
+
+    def get_buffer(self):
+        return self.buf
+
+
+class _Pad:
+    def add_probe(self, kind, probe):
+        self.kind, self.probe = kind, probe
+
+
+class _Src:
+    def __init__(self):
+        self.pad = _Pad()
+
+    def get_static_pad(self, name):
+        assert name == "src"
+        return self.pad
+
+
+class _Pipe:
+    def __init__(self, src):
+        self.src = src
+        self.clock = "pipewire"
+
+    def get_by_name(self, name):
+        return self.src if name == capture.PORTAL_SOURCE else None
+
+    def use_clock(self, clock):
+        self.clock = clock
+
+
+def test_retime_does_nothing_without_a_portal_source():
+    pipe = _Pipe(None)
+    assert capture.retime_portal_source(pipe, _ProbeGst) is False
+    assert pipe.clock == "pipewire"
+
+
+def test_retime_stamps_frames_on_arrival(monkeypatch):
+    """Systemlaufzeit als PTS ließ pipewiresrc Stunden warten – jetzt Zeit ab erstem Bild."""
+    src = _Src()
+    pipe = _Pipe(src)
+    assert capture.retime_portal_source(pipe, _ProbeGst) is True
+    assert pipe.clock is None                    # nichts wartet auf eine Uhr
+    probe = src.pad.probe
+    assert src.pad.kind == _ProbeGst.PadProbeType.BUFFER
+
+    now = iter([5_000_000_000, 5_033_000_000])
+    monkeypatch.setattr(capture.time, "monotonic_ns", lambda: next(now))
+    first, second = _Buf(), _Buf()
+    assert probe(None, _Info(first)) == _ProbeGst.PadProbeReturn.OK
+    assert probe(None, _Info(second)) == _ProbeGst.PadProbeReturn.OK
+    assert (first.pts, second.pts) == (0, 33_000_000)
+    assert second.dts == _ProbeGst.CLOCK_TIME_NONE
+
+
+def test_retime_drops_the_empty_pause_frame():
+    src = _Src()
+    capture.retime_portal_source(_Pipe(src), _ProbeGst)
+    assert src.pad.probe(None, _Info(_Buf(corrupted=True))) == _ProbeGst.PadProbeReturn.DROP
+    assert src.pad.probe(None, _Info(None)) == _ProbeGst.PadProbeReturn.OK

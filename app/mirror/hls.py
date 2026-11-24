@@ -19,7 +19,12 @@ import tempfile
 from pathlib import Path
 
 from ..receivers.base import Feature
-from .capture import audio_source_desc, default_monitor_device, h264_encoder_desc
+from .capture import (
+    audio_source_desc,
+    default_monitor_device,
+    h264_encoder_desc,
+    retime_portal_source,
+)
 from .engine import MirrorEngine, gst_element_exists, gst_init
 
 
@@ -94,6 +99,7 @@ class HlsMirrorEngine(MirrorEngine):
             f"{self._audio_branch()}"
         )
         self._pipeline = Gst.parse_launch(desc)
+        retime_portal_source(self._pipeline, Gst)
 
         bus = self._pipeline.get_bus()
         bus.add_signal_watch()

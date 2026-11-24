@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.6.3" date="2026-11-24">
+      <description>
+        <p>Mirroring on Wayland works with xdg-desktop-portal-wlr: frames are timed on arrival, keep their proportions and colours and turn with the device. Shell quick settings can play a YouTube link or a video file on a TV and see what each device offers.</p>
+        <p xml:lang="de">Spiegeln unter Wayland klappt mit xdg-desktop-portal-wlr: Bilder werden bei Ankunft gestempelt, behalten Seitenverhältnis und Farben und drehen sich mit dem Gerät. Schnellschalter von Shells können einen YouTube-Link oder eine Videodatei auf dem Fernseher abspielen und sehen, was jedes Gerät kann.</p>
+      </description>
+    </release>
     <release version="0.6.2" date="2026-11-23">
       <description>
         <p>Mirroring on Wayland shows more than the first frame: the screen's frames are timed by the pipeline instead of the system uptime.</p>
