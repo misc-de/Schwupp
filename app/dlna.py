@@ -17,6 +17,8 @@ import urllib.parse
 import urllib.request
 from xml.sax.saxutils import escape
 
+from . import net
+
 AVTRANSPORT = "urn:schemas-upnp-org:service:AVTransport:1"
 RENDERING = "urn:schemas-upnp-org:service:RenderingControl:1"
 
@@ -39,7 +41,7 @@ def _ssdp_locations(host: str, st: str, timeout: float = 3.0) -> list[str]:
             break
         if addr[0] == host:
             m = re.search(r"LOCATION:\s*(\S+)", data.decode(errors="ignore"), re.I)
-            if m:
+            if m and net.location_of(m.group(1), host):
                 locs.append(m.group(1))
     s.close()
     return locs
@@ -88,10 +90,13 @@ class DlnaRenderer:
     def _services_from_description(self, loc: str) -> dict[str, str]:
         """Lädt die Geräte-Beschreibung und liefert {service: control-URL}."""
         try:
-            xml = urllib.request.urlopen(loc, timeout=5).read().decode(errors="ignore")
+            xml = net.http_read(loc, timeout=5).decode(errors="ignore")
         except OSError:
             return {}
-        base = re.match(r"(https?://[^/]+)", loc).group(1)
+        base_m = re.match(r"(https?://[^/]+)", loc)
+        if not base_m:
+            return {}
+        base = base_m.group(1)
         out: dict[str, str] = {}
         for svc in ("AVTransport:1", "RenderingControl:1"):
             m = re.search(rf"{svc}</serviceType>.*?<controlURL>([^<]+)</controlURL>", xml, re.S)
@@ -118,7 +123,7 @@ class DlnaRenderer:
                 "SOAPACTION": f'"{service}#{action}"',
             },
         )
-        return urllib.request.urlopen(req, timeout=timeout).read()
+        return net.http_read(req, timeout=timeout)
 
     def play_url(self, url: str, mime: str, title: str = "Schwupp", *,
                  live: bool = False, uri: str | None = None) -> None:

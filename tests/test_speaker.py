@@ -104,11 +104,7 @@ def test_renderer_without_service_list_gets_the_usual_paths(monkeypatch):
            "<friendlyName>Classic Stereo</friendlyName><modelName>ClassicStereo</modelName>"
            "</device></root>")
 
-    class Reply:
-        def read(self):
-            return xml.encode()
-
-    monkeypatch.setattr(discovery.urllib.request, "urlopen", lambda *a, **k: Reply())
+    monkeypatch.setattr(discovery.net, "http_read", lambda *a, **k: xml.encode())
     monkeypatch.setattr(discovery, "guess_controls",
                         lambda base: (f"{base}/AVTransport/control",
                                       f"{base}/RenderingControl/control"))

@@ -207,6 +207,27 @@ _INT_RANGES = {"mirror_bitrate_kbps": (1000, 20000), "mirror_fps": (10, 60),
                "mirror_target_delay_ms": (0, 2000)}
 
 
+def is_media_file(path: str) -> bool:
+    """Eine Video- oder Audiodatei?
+
+    ``PlayFile`` gibt die Datei über den Medienserver im LAN frei. Ohne diese
+    Prüfung könnte jedes Programm am Bus so auch Schlüssel oder Dokumente
+    freigeben lassen. Die Endung entscheidet zuerst; sagt sie nichts (oder
+    etwas anderes, ``.ts`` ist auch Qt-Linguist), schaut GIO in den Inhalt.
+    """
+    def media(mime: str | None) -> bool:
+        return bool(mime) and mime.split("/", 1)[0] in ("video", "audio")
+
+    if media(mimetypes.guess_type(path)[0]):
+        return True
+    try:
+        info = Gio.File.new_for_path(path).query_info(
+            Gio.FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, Gio.FileQueryInfoFlags.NONE, None)
+    except GLib.Error:
+        return False
+    return media(Gio.content_type_get_mime_type(info.get_content_type() or ""))
+
+
 def can_mirror(info: ReceiverInfo) -> bool:
     """Kommt das Gerät als Fernseher (Spiegeln) in Frage?
 
@@ -675,6 +696,8 @@ class CastService:
         value = value.strip()
         if source == "video" and not os.path.isfile(value):
             raise ValueError(t("service.no_file", path=value))
+        if source == "video" and not is_media_file(value):
+            raise ValueError(t("service.no_video", path=value))
         if source != "video" and not value.lower().startswith(("http://", "https://")):
             raise ValueError(t("service.no_link"))
         self.stop_streaming()

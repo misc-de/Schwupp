@@ -13,8 +13,9 @@ from __future__ import annotations
 import plistlib
 import socket
 import sys
-import urllib.request
 from dataclasses import dataclass, field
+
+from . import net
 
 # Charakteristische Ports je Protokoll
 PORTS = {
@@ -69,7 +70,7 @@ def _airplay_flags(feat: int) -> list[str]:
 
 def _probe_airplay(host: str) -> dict | None:
     try:
-        data = urllib.request.urlopen(f"http://{host}:7000/info", timeout=4).read()
+        data = net.http_read(f"http://{host}:7000/info", timeout=4)
         info = plistlib.loads(data)
     except Exception:
         return None

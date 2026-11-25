@@ -76,8 +76,10 @@ def resolve_stream(page_url: str, max_height: int = 1080) -> ResolvedStream:
         f"best[ext=mp4][vcodec!=none][acodec!=none][height<=?{max_height}]/"
         f"best[vcodec!=none][acodec!=none]/best"
     )
+    # --no-playlist: Ein Link mit ``&list=`` lieferte sonst je Video eine
+    # JSON-Zeile. ``--`` davor, damit der Link nie als Option gilt.
     out = subprocess.run(
-        [*cmd, "-f", fmt, "-j", page_url],
+        [*cmd, "--no-playlist", "-f", fmt, "-j", "--", page_url],
         capture_output=True,
         text=True,
         timeout=60,

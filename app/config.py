@@ -1,9 +1,11 @@
 """Einfache, persistente Konfiguration (JSON unter XDG_CONFIG_HOME/schwupp)."""
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -105,11 +107,21 @@ class Config:
             pass
 
     def save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(self._data, fh, indent=2)
-        tmp.replace(self._path)
+        self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Nur für den Nutzer lesbar (mkstemp legt 0600 an): Die Datei hält die
+        # webOS-Schlüssel und die AirPlay-Kopplungsdaten, mit denen man sich als
+        # dieser Rechner beim Fernseher anmeldet. Eine ältere Datei mit 0644
+        # ersetzt das os.replace. Eigener Name je Aufruf, weil auch
+        # Verbindungs-Threads speichern.
+        fd, tmp = tempfile.mkstemp(dir=self._path.parent, prefix="config.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(self._data, fh, indent=2)
+            os.replace(tmp, self._path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
 
     def __getitem__(self, key: str) -> Any:
         return self._data.get(key, _DEFAULTS.get(key))

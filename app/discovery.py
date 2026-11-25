@@ -32,6 +32,7 @@ from pychromecast.discovery import CastBrowser, SimpleCastListener
 from pychromecast.models import CastInfo
 from zeroconf import IPVersion, ServiceStateChange
 
+from . import net
 from .dlna import guess_controls
 
 AIRPLAY_SERVICE = "_airplay._tcp.local."
@@ -82,8 +83,10 @@ def _ssdp_search(st: str, timeout: float = 3.0) -> dict[str, str]:
             except TimeoutError:
                 break
             m = re.search(rb"LOCATION:\s*(\S+)", data, re.I)
-            if m:
-                out.setdefault(addr[0], m.group(1).decode(errors="ignore"))
+            loc = m.group(1).decode(errors="ignore") if m else ""
+            # Nur eine Beschreibung auf dem antwortenden Gerät selbst
+            if loc and net.location_of(loc, addr[0]):
+                out.setdefault(addr[0], loc)
     finally:
         s.close()
     return out
@@ -121,7 +124,7 @@ def _fetch_renderer(loc: str) -> tuple[str, str, object] | None:
     None, wenn es kein AVTransport-MediaRenderer ist. *raw* ist die
     AVTransport-Control-URL, bei Sonos ein :class:`SonosInfo`."""
     try:
-        xml = urllib.request.urlopen(loc, timeout=5).read().decode(errors="ignore")
+        xml = net.http_read(loc, timeout=5).decode(errors="ignore")
     except OSError:
         return None
     base_m = re.match(r"(https?://[^/]+)", loc)
@@ -170,7 +173,7 @@ def sonos_groups(topology: str) -> dict[str, int] | None:
         "SOAPACTION": f'"{ZONE_TOPOLOGY}#GetZoneGroupState"',
     })
     try:
-        body = urllib.request.urlopen(req, timeout=5).read().decode(errors="ignore")
+        body = net.http_read(req, timeout=5).decode(errors="ignore")
     except OSError:
         return None
     return parse_zone_groups(html.unescape(body))

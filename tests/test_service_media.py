@@ -418,3 +418,31 @@ def test_the_active_device_stays_playable_when_the_search_lost_it(env):
     del env._devices["cast:tv"]
     env.play("cast:tv", "link", "https://youtu.be/dQw4w9WgXcQ")
     assert FakeReceiver.log[-1] == ("youtube", "dQw4w9WgXcQ")
+
+
+# ----- nur Video- und Audiodateien ins LAN -----
+
+def test_play_file_shares_only_media(env, tmp_path):
+    """PlayFile gibt die Datei im LAN frei – ein Schlüssel oder Dokument nie."""
+    secret = tmp_path / "id_ed25519"
+    secret.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\n")
+    notes = tmp_path / "notizen.txt"
+    notes.write_text("privat")
+    for path in (secret, notes):
+        with pytest.raises(ValueError):
+            env.play("cast:tv", "video", str(path))
+    assert FakeReceiver.log == []
+    assert env.app.server.files == {}
+
+
+def test_media_by_extension_or_content(tmp_path):
+    from app.service import is_media_file
+
+    song = tmp_path / "Lied.flac"
+    song.write_bytes(b"\0")
+    assert is_media_file(str(song))
+    # Ohne Endung entscheidet der Inhalt (MP4: „ftyp“ im ersten Kasten)
+    clip = tmp_path / "clip"
+    clip.write_bytes(b"\0\0\0\x18ftypisom\0\0\0\0isomiso2" + b"\0" * 64)
+    assert is_media_file(str(clip))
+    assert not is_media_file(str(tmp_path / "fehlt"))

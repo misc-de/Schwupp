@@ -37,6 +37,10 @@ mimetypes.add_type("video/mp2t", ".ts")
 mimetypes.add_type("video/fmp4", ".m4s")
 
 _CHUNK = 64 * 1024
+# So lange darf ein Client für seine Anfrage (Zeile und Kopf) brauchen und eine
+# Keep-alive-Verbindung leer stehen. Ohne Grenze hielte jeder, der eine
+# Verbindung öffnet und schweigt, einen Thread für immer (Slowloris).
+REQUEST_TIMEOUT_S = 20
 
 
 def _guess_mime(path: str) -> str:
@@ -211,6 +215,8 @@ class MediaServer:
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
+            # StreamRequestHandler.setup setzt das als Socket-Timeout
+            timeout = REQUEST_TIMEOUT_S
 
             def log_message(self, *args) -> None:  # noqa: ANN002
                 pass  # nicht auf stderr spammen
@@ -242,6 +248,17 @@ class MediaServer:
                 super().end_headers()
 
             def _dispatch(self, head_only: bool) -> None:
+                # Die Anfrage ist gelesen: Beim Ausliefern darf das Gerät
+                # pausieren (Video angehalten, Puffer voll), wie bisher ohne
+                # Grenze; danach gilt wieder die für die nächste Anfrage.
+                self.connection.settimeout(None)
+                try:
+                    self._serve(head_only)
+                finally:
+                    with contextlib.suppress(OSError):
+                        self.connection.settimeout(self.timeout)
+
+            def _serve(self, head_only: bool) -> None:
                 area, rest = self._route()
                 if area == "live":
                     self._serve_live(rest, head_only)

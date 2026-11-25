@@ -128,6 +128,7 @@
   "sound.gst_error": "The sound could not be encoded: {error}",
   "service.no_media": "This device cannot play videos or links",
   "service.no_file": "There is no video file at {path}",
+  "service.no_video": "{path} is not a video or audio file",
   "service.no_link": "That is not a web link (https://…)",
   "service.play_failed": "Playing failed: {error}",
   "service.inhibit_media": "Plays a video on {name}",

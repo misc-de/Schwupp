@@ -52,7 +52,7 @@ class SettingsDialog(Adw.PreferencesDialog):
             return  # Gerät kann nicht spiegeln -> keine Sektion
         info = receiver.info
 
-        grp = Adw.PreferencesGroup(title=t("settings.mirror_group"), description=receiver.name)
+        grp = Adw.PreferencesGroup(title=t("settings.mirror_group"), description=GLib.markup_escape_text(receiver.name))
         page.add(grp)
 
         self._engines = engines

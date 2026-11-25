@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.6.5" date="2026-11-25">
+      <description>
+        <p>Safer with devices on the network: speaker names can no longer change the AirPlay sound configuration, device descriptions are only read from the device itself and up to 1 MiB, and the settings with the TV keys are readable only by you. Only video and audio files are shared, device names with an ampersand show up again.</p>
+        <p xml:lang="de">Sicherer gegenüber Geräten im Netz: Lautsprechernamen können die AirPlay-Tonkonfiguration nicht mehr verändern, Gerätebeschreibungen werden nur vom Gerät selbst und bis 1 MiB gelesen, und die Einstellungen mit den TV-Schlüsseln sind nur für dich lesbar. Freigegeben werden nur Video- und Audiodateien, Gerätenamen mit „&amp;“ erscheinen wieder.</p>
+      </description>
+    </release>
     <release version="0.6.4" date="2026-11-24">
       <description>
         <p>Less delay when mirroring with a hardware encoder: frames go to the encoder without waiting for the next one, carry a proper H.264 level and the send time. The desktop on a TV can have its own sound.</p>

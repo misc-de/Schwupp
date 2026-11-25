@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.sources import youtube
 from app.sources.youtube import parse_video_id
 
 VIDEO_ID = "dQw4w9WgXcQ"
@@ -44,3 +45,22 @@ def test_host_matching_is_case_insensitive():
 def test_lookalike_domain_is_not_youtube():
     """youtube.com.evil.example darf nicht als YouTube durchgehen."""
     assert parse_video_id(f"https://youtube.com.evil.example/watch?v={VIDEO_ID}") is None
+
+
+def test_yt_dlp_gets_the_link_as_one_video_never_as_an_option(monkeypatch):
+    import subprocess
+
+    calls = []
+
+    def run(cmd, **_kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout='{"url": "https://cdn.example.org/v.mp4", "ext": "mp4"}', stderr="")
+
+    monkeypatch.setattr(youtube, "yt_dlp_cmd", lambda: ["yt-dlp"])
+    monkeypatch.setattr(youtube.subprocess, "run", run)
+    stream = youtube.resolve_stream("https://www.youtube.com/watch?v=abc&list=PL1")
+    assert stream.url == "https://cdn.example.org/v.mp4"
+    cmd = calls[0]
+    assert "--no-playlist" in cmd
+    assert cmd[-2:] == ["--", "https://www.youtube.com/watch?v=abc&list=PL1"]

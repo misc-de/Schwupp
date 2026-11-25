@@ -128,6 +128,7 @@
   "sound.gst_error": "Der Ton ließ sich nicht kodieren: {error}",
   "service.no_media": "Dieses Gerät kann keine Videos oder Links abspielen",
   "service.no_file": "Unter {path} liegt keine Videodatei",
+  "service.no_video": "{path} ist keine Video- oder Audiodatei",
   "service.no_link": "Das ist kein Web-Link (https://…)",
   "service.play_failed": "Abspielen fehlgeschlagen: {error}",
   "service.inhibit_media": "Spielt ein Video auf {name}",

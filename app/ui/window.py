@@ -74,7 +74,9 @@ class MainWindow(Adw.ApplicationWindow):
         settings_btn.set_tooltip_text(t("window.settings"))
         settings_btn.connect("clicked", self._open_settings)
         header.pack_end(settings_btn)
-        self._service_banner = Adw.Banner(button_label=t("window.stop"))
+        # Gerätenamen kommen aus dem Netz: Text, kein Pango-Markup („Bad & Küche“
+        # wäre sonst leer, ein <a href> ein Link)
+        self._service_banner = Adw.Banner(button_label=t("window.stop"), use_markup=False)
         self._service_banner.connect("button-clicked",
                                      lambda _b: self.app.service.stop_streaming())
         toolbar.add_top_bar(self._service_banner)
@@ -115,7 +117,7 @@ class MainWindow(Adw.ApplicationWindow):
         kind_label = t(f"device.{info.kind}")
         row = Adw.ActionRow(title=info.name,
                             subtitle=f"{kind_label} · {info.model or info.host}",
-                            activatable=True)
+                            activatable=True, use_markup=False)
         row.add_prefix(Gtk.Image.new_from_icon_name(
             _KIND_ICON.get(info.kind, "video-display-symbolic")))
         # Auflösung, Bitrate, Ton … pro Gerät, ohne erst zu verbinden
@@ -552,7 +554,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._service_banner.set_revealed(True)
 
     def _toast(self, text: str) -> bool:
-        self._toasts.add_toast(Adw.Toast(title=text, timeout=3))
+        self._toasts.add_toast(Adw.Toast(title=text, timeout=3, use_markup=False))
         return False
 
     def _safe(self, fn) -> None:

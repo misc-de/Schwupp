@@ -16,7 +16,9 @@ den Pegel (``monitor.channel-volumes``).
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -64,10 +66,28 @@ def default_sink() -> str:
     return pactl("get-default-sink")
 
 
+# Länge eines Gerätenamens in den Ton-Einstellungen
+_LABEL_MAX = 80
+
+
+def safe_label(text: str) -> str:
+    """Gerätename, wie er in PipeWire-Konfiguration und Modul-Argumente darf.
+
+    Der Name kommt aus dem Netz (mDNS-Dienstname, UPnP-Beschreibung) und ist
+    damit fremd bestimmt. In der Konfiguration des RAOP-Prozesses beendete ein
+    Zeilenumbruch den Kommentar, ein Anführungszeichen oder Backslash den
+    String; danach ließe sich etwa ``context.exec`` einschleusen, das beliebige
+    Programme startet. Übrig bleiben druckbare Zeichen ohne Anführungszeichen,
+    Backslash und ``$``, Leerraum zusammengefasst.
+    """
+    printable = "".join(c if c.isprintable() else " " for c in text)
+    return " ".join(re.sub(r"[\"'\\$]", "", printable).split())[:_LABEL_MAX]
+
+
 def _quote(text: str) -> str:
     """Wert innerhalb von ``sink_properties`` (in einfachen Anführungszeichen;
     die ganze Liste steht in doppelten)."""
-    return "'" + text.replace("'", "").replace('"', "") + "'"
+    return "'" + safe_label(text) + "'"
 
 
 class _DefaultSwitch:
@@ -140,7 +160,10 @@ class RaopSink(_DefaultSwitch):
 
     def __init__(self, host: str, port: int, description: str) -> None:
         super().__init__()
-        self.host = host
+        # Beides landet in der Konfiguration: nur eine echte IP und ein Port
+        self.host = str(ipaddress.ip_address(host))
+        if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+            raise ValueError(f"port: {port!r}")
         self.port = port
         self.description = description
         self._proc: subprocess.Popen | None = None
@@ -148,7 +171,7 @@ class RaopSink(_DefaultSwitch):
         self._log: Path | None = None
 
     def _config(self) -> str:
-        desc = self.description.replace('"', "")
+        desc = safe_label(self.description)
         return f"""# Schwupp: AirPlay-Ausgabe für {desc}
 context.properties = {{ log.level = 2 }}
 context.spa-libs = {{
