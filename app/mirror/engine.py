@@ -192,6 +192,7 @@ def gst_init():
 _ENGINE_MODULES = (
     ("native", "NativeMirrorEngine"),
     ("airplay", "AirplayMirrorEngine"),
+    ("doubletake", "DoubletakeMirrorEngine"),
     ("hls", "HlsMirrorEngine"),
     ("dlnats", "DlnaTsMirrorEngine"),
 )
@@ -235,13 +236,13 @@ def available_engines() -> list[EngineInfo]:
 # Welche Spiegel-Engines pro Gerätetyp sinnvoll sind. Reihenfolge = Vorzug.
 # webOS-only und reine DLNA-TVs bieten von Linux aus kein zuverlässiges
 # Live-Mirroring (siehe receivers/webos.py, docs/MIRRORING.md) -> leer.
-# AirPlay-TVs: echte AirPlay-Spiegelung (doubletake) vor HLS – Letzteres setzt
-# voraus, dass das Gerät play_url beherrscht, was längst nicht jedes tut
-# (siehe docs/MIRRORING.md).
+# AirPlay-TVs: eigene AirPlay-Spiegelung, dann doubletake (falls installiert),
+# zuletzt HLS – Letzteres setzt voraus, dass das Gerät play_url beherrscht, was
+# längst nicht jedes tut (siehe docs/MIRRORING.md).
 _KIND_ENGINES: dict[str, tuple[str, ...]] = {
     "chromecast": ("native", "hls"),
     "webos": (),
-    "airplay": ("airplay", "hls"),
+    "airplay": ("airplay", "doubletake", "hls"),
     "dlna": (),
 }
 

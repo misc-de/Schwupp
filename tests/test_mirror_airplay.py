@@ -1,152 +1,395 @@
-"""AirPlay-Spiegel-Engine: Kommandozeile, Auffinden des Programms, Fehlertexte.
+"""Eigene AirPlay-Engine: Kopplungsdaten, Ablauf, Encoder und Selbstheilung.
 
-Die Engine startet ein Hilfsprogramm; getestet wird deshalb, dass die Aufrufe
-stimmen – insbesondere die beiden Einstellungen, die am echten Gerät den
-Unterschied zwischen Standbild und laufendem Bild ausgemacht haben: H.264 statt
-HEVC und ein fester UDP-Portbereich für die Firewall.
+Das Protokoll selbst prüft ``test_airplay_stream``; hier geht es um das, was
+die Engine darum herum entscheidet: welche Kopplung sie nimmt und wo sie neue
+ablegt (die mit pyatv geteilte, damit der Fernseher nicht zweimal nach einem
+Code fragt), dass ein Empfänger ohne PTP-Uhr einen zweiten Versuch mit NTP
+bekommt, und dass die Bilder ohne Vorschaubild-Warten in die Sitzung gehen.
 """
 from __future__ import annotations
 
 import pytest
 
 from app.mirror import airplay
-from app.mirror.airplay import PORT_RANGE, AirplayMirrorEngine
+from app.mirror.airplay import AirplayMirrorEngine
+from app.mirror.airplay_stream import hap
+from app.mirror.airplay_stream.session import MirrorError, PtpUnavailable
+
+CREDS = hap.Credentials(b"\x01" * 32, b"\x02" * 32, b"TV", b"ME")
+OTHER = hap.Credentials(b"\x03" * 32, b"\x04" * 32, b"TV", b"MIRROR")
+
+
+class _Config(dict):
+    saved = 0
+
+    def __getitem__(self, key):
+        return self.get(key)
+
+    def device_value_for(self, info, key):  # noqa: ARG002
+        return self.get(key)
+
+    def save(self):
+        self.saved += 1
 
 
 class _Receiver:
-    host = "192.168.0.50"
     kind = "airplay"
+    host = "192.0.2.40"
     info = None
 
     def __init__(self):
         self.pin_callback = lambda: "1234"
 
 
-class _Config(dict):
-    def device_value_for(self, info, key):  # noqa: ANN001, ARG002
-        return self.get(key)
+def _engine(**config):
+    base = {"mirror_fps": 30, "mirror_bitrate_kbps": 6000, "mirror_height": 1080,
+            "mirror_target_delay_ms": 150, "mirror_encoder": "auto",
+            "airplay_creds": {}, "airplay_mirror_creds": {}}
+    base.update(config)
+    errors = []
+    engine = AirplayMirrorEngine(_Receiver(), None, _Config(base), on_error=errors.append)
+    engine._running = True
+    return engine, errors
+
+
+def test_the_playback_pairing_is_reused_for_mirroring():
+    engine, _ = _engine(airplay_creds={"192.0.2.40": str(CREDS)})
+    assert engine._credentials() == CREDS
+    engine, _ = _engine(airplay_creds={"192.0.2.40": str(CREDS)},
+                        airplay_mirror_creds={"192.0.2.40": str(OTHER)})
+    assert engine._credentials() == OTHER          # eigene Spiegel-Kopplung zuerst
+    engine, _ = _engine(airplay_creds={"192.0.2.99": str(CREDS)})
+    assert engine._credentials() is None
+
+
+def test_new_pairings_go_where_the_receiver_expects_them():
+    engine, _ = _engine(airplay_creds={"192.0.2.7": "x"})
+    engine._store_credentials(CREDS, True)
+    assert engine.config["airplay_creds"] == {"192.0.2.7": "x", "192.0.2.40": str(CREDS)}
+    engine._store_credentials(OTHER, False)
+    assert engine.config["airplay_mirror_creds"] == {"192.0.2.40": str(OTHER)}
+    assert engine.config.saved == 2
+
+
+def test_only_airplay_devices_are_mirrored_this_way():
+    engine, errors = _engine()
+    engine._running = False
+    engine.receiver.kind = "chromecast"
+    engine.start()
+    assert errors and "nur für AirPlay" in errors[0]
+
+
+def test_availability_depends_on_encoder_and_capture(monkeypatch):
+    from app.mirror import capture
+
+    monkeypatch.setattr(capture, "available_encoders", lambda: [])
+    ok, detail = AirplayMirrorEngine.check_available()
+    assert not ok and "Encoder" in detail
+    monkeypatch.setattr(capture, "available_encoders", lambda: ["x264"])
+    monkeypatch.setattr(capture, "capture_available", lambda: (False, "kein Portal"))
+    assert AirplayMirrorEngine.check_available() == (False, "kein Portal")
+    monkeypatch.setattr(capture, "capture_available", lambda: (True, ""))
+    assert AirplayMirrorEngine.check_available() == (True, "Bereit")
+
+
+class _FakeSession:
+    instances: list = []
+    fail_setup: list = []
+
+    def __init__(self, host, **kwargs):
+        self.host = host
+        self.kwargs = kwargs
+        self.closed = False
+        self.sent: list[bytes] = []
+        self.restarted = 0
+        _FakeSession.instances.append(self)
+
+    def connect(self):
+        pass
+
+    def setup(self, width, height):
+        self.size = (width, height)
+        if _FakeSession.fail_setup:
+            raise _FakeSession.fail_setup.pop(0)
+
+    def send_access_unit(self, data):
+        self.sent.append(data)
+        return True
+
+    def restart_video(self):
+        self.restarted += 1
+
+    def close(self):
+        self.closed = True
 
 
 @pytest.fixture
-def engine(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    config = _Config({"mirror_fps": 30, "mirror_bitrate_kbps": 0,
-                      "mirror_audio": True, "mirror_target_delay_ms": 0,
-                      "mirror_airplay_codec": "h264"})
-    return AirplayMirrorEngine(_Receiver(), None, config)
+def fake_session(monkeypatch):
+    _FakeSession.instances = []
+    _FakeSession.fail_setup = []
+    monkeypatch.setattr(airplay, "MirrorSession", _FakeSession)
+    return _FakeSession
 
 
-def _command(engine, monkeypatch, tmp_path):
-    """Startet run() mit einem abgefangenen Popen und liefert die Kommandozeile."""
-    captured = {}
-
-    class FakePopen:
-        def __init__(self, cmd, **kwargs):
-            captured["cmd"] = cmd
-            self.stdout = iter([])
-            self.stdin = None
-
-        def poll(self):
-            return 0
-
-    monkeypatch.setattr(airplay, "_find_binary", lambda: "/usr/bin/doubletake")
-    monkeypatch.setattr(airplay.subprocess, "Popen", FakePopen)
-    with pytest.raises(RuntimeError):      # ohne Ausgabe kommt kein "ready"
-        engine.run("")
-    return captured["cmd"]
+def test_run_connects_negotiates_and_starts_the_encoder(fake_session, monkeypatch):
+    engine, _ = _engine(airplay_creds={"192.0.2.40": str(CREDS)})
+    launched = []
+    monkeypatch.setattr(engine, "_launch_encoder", lambda fps, kbps: launched.append((fps, kbps)))
+    engine.run("pipewiresrc fd=3 path=4")
+    (s,) = fake_session.instances
+    assert s.host == "192.0.2.40" and s.size == (1920, 1080)
+    assert s.kwargs["credentials"] == CREDS and s.kwargs["port_range"] == (60000, 60010)
+    assert s.kwargs["latency_ms"] == 150 and not s.kwargs["force_ntp"]
+    assert launched == [(30, 6000)]
 
 
-def test_command_uses_h264_and_a_fixed_port_range(engine, monkeypatch, tmp_path):
-    """Beides war am echten Gerät entscheidend: HEVC ergab nur ein Standbild,
-    und ohne festen Portbereich lässt sich keine Firewall-Regel angeben."""
-    cmd = _command(engine, monkeypatch, tmp_path)
-    assert "-video-codec" in cmd and cmd[cmd.index("-video-codec") + 1] == "h264"
-    assert "-port-range" in cmd and cmd[cmd.index("-port-range") + 1] == PORT_RANGE
-    assert cmd[cmd.index("-target") + 1] == "192.168.0.50"
+def test_a_receiver_without_ptp_clock_gets_a_second_try_with_ntp(fake_session, monkeypatch):
+    engine, _ = _engine()
+    monkeypatch.setattr(engine, "_launch_encoder", lambda fps, kbps: None)
+    fake_session.fail_setup = [PtpUnavailable("keine Uhr")]
+    engine.run("src")
+    first, second = fake_session.instances
+    assert first.closed and not second.closed
+    assert second.kwargs["force_ntp"] is True
+    assert engine._session is second
 
 
-def test_first_run_asks_for_pairing(engine, monkeypatch, tmp_path):
-    cmd = _command(engine, monkeypatch, tmp_path)
-    assert "-pair" in cmd           # noch keine Zugangsdaten vorhanden
+def test_failures_close_the_session(fake_session):
+    engine, _ = _engine()
+    fake_session.fail_setup = [MirrorError("abgelehnt")]
+    with pytest.raises(MirrorError):
+        engine.run("src")
+    assert fake_session.instances[0].closed
 
 
-def test_audio_is_included_when_enabled(engine, monkeypatch, tmp_path):
-    assert "-no-audio" not in _command(engine, monkeypatch, tmp_path)
+def test_a_stop_during_pairing_closes_quietly(fake_session, monkeypatch):
+    engine, _ = _engine()
+    monkeypatch.setattr(fake_session, "connect", lambda self: setattr(engine, "_running", False))
+    engine.run("src")
+    assert fake_session.instances[0].closed
 
 
-def test_audio_can_be_switched_off(engine, monkeypatch, tmp_path):
-    engine.config["mirror_audio"] = False
-    assert "-no-audio" in _command(engine, monkeypatch, tmp_path)
+class _Element:
+    def connect(self, *args):
+        self.callback = args[-1]
+
+    def add_signal_watch(self):
+        pass
 
 
-def test_latency_override_only_when_set(engine, monkeypatch, tmp_path):
-    assert "-target-latency-ms" not in _command(engine, monkeypatch, tmp_path)
-    engine.config["mirror_target_delay_ms"] = 80
-    cmd = _command(engine, monkeypatch, tmp_path)
-    assert cmd[cmd.index("-target-latency-ms") + 1] == "80"
+class _Pipeline(_Element):
+    def __init__(self, desc):
+        self.desc = desc
+        self.sink = _Element()
+        self.state = None
+
+    def get_by_name(self, name):
+        return None if name == "portalsrc" else self.sink
+
+    def get_bus(self):
+        return _Element()
+
+    def set_state(self, state):
+        self.state = state
 
 
-# -- Auffinden des Programms ------------------------------------------------
+class _Gst:
+    class State:
+        PLAYING = "playing"
+        NULL = "null"
 
-def test_env_override_wins(monkeypatch, tmp_path):
-    binary = tmp_path / "doubletake"
-    binary.write_text("#!/bin/sh\n")
-    binary.chmod(0o755)
-    monkeypatch.setenv("SCHWUPP_DOUBLETAKE", str(binary))
-    assert airplay._find_binary() == str(binary)
+    class FlowReturn:
+        OK = "ok"
 
+    class MapFlags:
+        READ = 1
 
-def test_missing_binary_is_reported_clearly(monkeypatch):
-    monkeypatch.delenv("SCHWUPP_DOUBLETAKE", raising=False)
-    monkeypatch.setattr(airplay.shutil, "which", lambda _n: None)
-    monkeypatch.setattr(airplay.os, "access", lambda *a, **k: False)
-    ok, detail = AirplayMirrorEngine.check_available()
-    assert not ok
-    assert "doubletake" in detail
+    def __init__(self):
+        self.pipelines = []
 
-
-# -- Fehlertexte ------------------------------------------------------------
-
-@pytest.mark.parametrize("output,expected", [
-    ("pairing failed: pair-setup: pair-setup M4 error: 2", "Code"),
-    ("dial tcp: connection refused", "nicht erreichbar"),
-    ("pairing credential cannot be empty", "kein Code"),
-])
-def test_output_becomes_a_helpful_message(output, expected):
-    assert expected in AirplayMirrorEngine._explain(output)
+    def parse_launch(self, desc):
+        self.pipelines.append(_Pipeline(desc))
+        return self.pipelines[-1]
 
 
-def test_unknown_output_is_kept_verbatim():
-    assert "seltsamer Fehler" in AirplayMirrorEngine._explain("seltsamer Fehler")
+def _with_gst(engine, monkeypatch):
+    gst = _Gst()
+    monkeypatch.setattr(airplay, "gst_init", lambda: gst)
+    monkeypatch.setattr(airplay, "h264_encoder_desc", lambda *a: "fakeh264enc")
+    return gst
 
 
-# -- Auswahl der Spiegel-Wege ------------------------------------------------
-
-class _Recv:
-    kind = "airplay"
-
-    def __init__(self, video: bool):
-        self._video = video
-
-    def supports(self, feature):  # noqa: ANN001
-        from app.receivers.base import Feature
-        return self._video if feature == Feature.VIDEO else True
-
-
-def test_hls_is_dropped_when_a_device_takes_no_video(monkeypatch):
-    """HLS-Spiegelung schickt dem Gerät eine Video-URL – nimmt es die nicht an,
-    gehört der Weg nicht in die Auswahl."""
-    from app.mirror import engines_for_kind
-    names = [e.name for e in engines_for_kind("airplay", _Recv(video=False))]
-    assert names == ["airplay"]
+def test_encoder_output_is_whole_frames_without_a_preroll(monkeypatch):
+    engine, _ = _engine()
+    gst = _with_gst(engine, monkeypatch)
+    engine._source_desc = "pipewiresrc fd=3 path=4"
+    engine._size = (1920, 1080)
+    engine._launch_encoder(30, 6000)
+    desc = gst.pipelines[0].desc
+    assert desc.startswith("pipewiresrc fd=3 path=4 ")
+    assert "width=1920,height=1080" in desc and "fakeh264enc" in desc
+    assert "stream-format=byte-stream,alignment=au" in desc
+    assert "appsink name=sink" in desc and "async=false" in desc
+    assert gst.pipelines[0].state == "playing"
 
 
-def test_hls_stays_for_devices_that_play_video():
-    from app.mirror import engines_for_kind
-    names = [e.name for e in engines_for_kind("airplay", _Recv(video=True))]
-    assert "hls" in names and "airplay" in names
+class _Buffer:
+    def __init__(self, data):
+        self.data = data
+        self.unmapped = False
+
+    def map(self, flags):  # noqa: ARG002
+        return True, type("Info", (), {"data": self.data})()
+
+    def unmap(self, info):  # noqa: ARG002
+        self.unmapped = True
 
 
-def test_without_a_receiver_nothing_is_filtered():
-    from app.mirror import engines_for_kind
-    assert [e.name for e in engines_for_kind("airplay")] == ["airplay", "hls"]
+class _Sample:
+    def __init__(self, data):
+        self.buffer = _Buffer(data)
+
+    def get_buffer(self):
+        return self.buffer
+
+
+class _Sink:
+    def __init__(self, sample):
+        self.sample = sample
+
+    def emit(self, name):
+        assert name == "pull-sample"
+        return self.sample
+
+
+def test_encoded_frames_go_to_the_session(fake_session, monkeypatch):
+    engine, _ = _engine()
+    engine._Gst = _Gst()
+    session = fake_session("192.0.2.40")
+    engine._session = session
+    sample = _Sample(b"\x00\x00\x01\x65")
+    assert engine._on_sample(_Sink(sample)) == "ok"
+    assert session.sent == [b"\x00\x00\x01\x65"] and sample.buffer.unmapped
+    assert engine._last_frame > 0
+    assert engine._on_sample(_Sink(None)) == "ok"
+    engine._running = False
+    engine._on_sample(_Sink(_Sample(b"x")))
+    assert len(session.sent) == 1
+
+
+def test_a_frozen_capture_restarts_encoder_but_keeps_the_session(fake_session, monkeypatch):
+    engine, errors = _engine()
+    gst = _with_gst(engine, monkeypatch)
+    engine._Gst = gst
+    engine._size = (1920, 1080)
+    session = fake_session("192.0.2.40")
+    engine._session = session
+    engine._pipeline = old = _Pipeline("alt")
+    engine._capture = type("Cap", (), {"restart_sync": lambda self: "neue-quelle",
+                                       "stop": lambda self: None})()
+    engine._recover()
+    assert old.state == "null" and session.restarted == 1
+    assert gst.pipelines[-1].desc.startswith("neue-quelle ")
+    assert not errors and not engine._recovering
+
+    engine._capture = type("Cap", (), {"restart_sync": lambda self: None,
+                                       "stop": lambda self: None})()
+    engine._recover()
+    assert "Freigabe" in errors[-1]
+
+
+def test_repeated_freezes_end_the_mirroring(monkeypatch):
+    engine, errors = _engine()
+    engine._recover_times = [airplay.time.time()] * airplay.MAX_RECOVERIES
+    engine._recover()
+    assert "wiederholt" in errors[0]
+
+
+def test_session_failures_reach_the_interface_once_running():
+    engine, errors = _engine()
+    engine._on_session_failure("Fernseher aus")
+    assert errors == ["Fernseher aus"]
+    engine._running = False
+    engine._on_session_failure("später")
+    assert errors == ["Fernseher aus"]
+
+
+def test_stop_ends_pipeline_and_session(fake_session):
+    engine, _ = _engine()
+    engine._Gst = _Gst()
+    engine._pipeline = pipeline = _Pipeline("x")
+    engine._session = session = fake_session("192.0.2.40")
+    engine.stop()
+    assert pipeline.state == "null" and session.closed
+    assert engine._session is None and not engine.running
+    engine.stop()
+
+
+def test_start_begins_capture_and_watches_for_frozen_pictures(monkeypatch):
+    from app.mirror import engine as engine_module
+
+    started = []
+    monkeypatch.setattr(engine_module.MirrorEngine, "start", lambda self: started.append(1))
+    engine, _ = _engine()
+    engine._running = False
+    recovered = []
+    monkeypatch.setattr(engine, "_recover", lambda: recovered.append(1))
+    ticks = iter([None, None, None])
+
+    def sleep(_s):
+        try:
+            next(ticks)
+        except StopIteration:
+            engine._running = False
+
+    monkeypatch.setattr(airplay.time, "sleep", sleep)
+    engine._last_frame = airplay.time.monotonic() - 10      # seit 10 s kein Bild
+    monkeypatch.setattr(airplay.threading, "Thread",
+                        lambda target, **kw: type("T", (), {"start": lambda self: target()})())
+    engine._running = True
+    engine.start()
+    assert started == [1] and recovered
+
+
+def test_a_stop_right_after_setup_closes_the_session(fake_session, monkeypatch):
+    engine, _ = _engine()
+    original = fake_session.setup
+
+    def setup(self, width, height):
+        original(self, width, height)
+        engine._running = False
+
+    monkeypatch.setattr(fake_session, "setup", setup)
+    launched = []
+    monkeypatch.setattr(engine, "_launch_encoder", lambda *a: launched.append(a))
+    engine.run("src")
+    assert fake_session.instances[0].closed and not launched
+
+
+def test_gstreamer_errors_end_the_mirroring():
+    engine, errors = _engine()
+    message = type("M", (), {"parse_error": lambda self: ("kaputt", "debug")})()
+    engine._on_bus_error(None, message)
+    assert errors == ["GStreamer-Fehler beim Spiegeln: kaputt"]
+
+
+def test_unmappable_buffers_are_skipped(fake_session):
+    engine, _ = _engine()
+    engine._Gst = _Gst()
+    engine._session = session = fake_session("192.0.2.40")
+    sample = _Sample(b"x")
+    sample.buffer.map = lambda flags: (False, None)
+    assert engine._on_sample(_Sink(sample)) == "ok"
+    assert session.sent == []
+
+
+def test_a_failing_restart_ends_the_mirroring(fake_session, monkeypatch):
+    engine, errors = _engine()
+    engine._Gst = _Gst()
+
+    def broken(self):
+        raise RuntimeError("Portal weg")
+
+    engine._capture = type("Cap", (), {"restart_sync": broken, "stop": lambda self: None})()
+    engine._recover()
+    assert "Portal weg" in errors[0] and not engine._recovering

@@ -90,3 +90,27 @@ def test_dlna_video_sink_does_not_wait_for_a_preroll(monkeypatch):
     with pytest.raises(Stop):
         engine.run("pipewiresrc fd=3 path=4")
     assert "appsink name=sink" in built["desc"] and "async=false" in built["desc"]
+
+
+@pytest.mark.parametrize("module, cls", [
+    (dlnats, "DlnaTsMirrorEngine"), (native, "NativeMirrorEngine"),
+])
+def test_bus_errors_reach_the_interface(module, cls):
+    """Der Fehler-Callback der Oberfläche heißt in der Basisklasse ``_on_error``.
+    Hieß der Bus-Handler einer Engine genauso, überdeckte das Attribut ihn: Ein
+    GStreamer-Fehler rief dann den Callback mit (Bus, Nachricht) auf und kam nie
+    in der Oberfläche an."""
+    errors = []
+    engine = getattr(module, cls)(None, None, {}, on_error=errors.append)
+    handler = getattr(engine, "_on_bus_error", None) or engine._on_video_error
+    handler(None, type("M", (), {"parse_error": lambda self: ("kaputt", "")})())
+    assert errors == ["GStreamer-Fehler beim Spiegeln: kaputt"]
+
+
+def test_hls_bus_errors_reach_the_interface():
+    from app.mirror import hls
+
+    errors = []
+    engine = hls.HlsMirrorEngine(None, None, {}, on_error=errors.append)
+    engine._on_bus_error(None, type("M", (), {"parse_error": lambda self: ("kaputt", "")})())
+    assert errors == ["GStreamer-Fehler beim Spiegeln: kaputt"]

@@ -168,8 +168,9 @@ eine Meldung, die den Grund nennt, statt in einen Zeitüberlauf zu laufen.
 Derselbe Hisense, der oben kein Video über `play_url` annimmt, **spiegelt den
 Bildschirm einwandfrei** – nur eben über das AirPlay-Mirroring-Protokoll, das
 pyatv nicht spricht. Übernommen hat das [doubletake](https://github.com/omarroth/doubletake)
-(Go, LGPL-3.0), das Schwupp als Hilfsprogramm aufruft – wie `wf-recorder` und
-`yt-dlp` auch. Engine: `app/mirror/airplay.py`.
+(Go, LGPL-3.0), das Schwupp als Hilfsprogramm aufrufen kann – wie `wf-recorder`
+und `yt-dlp` auch. Engine: `app/mirror/doubletake.py`; inzwischen spricht
+Schwupp das Protokoll auch selbst (siehe unten).
 
 ### Die Annahme, die uns aufgehalten hat
 
@@ -223,10 +224,75 @@ Die Wiedergabesteuerung ist deshalb kein Feature des AirPlay-Backends mehr.
 Eine laufende Übertragung wird über den Zurück-Weg beendet, der die Verbindung
 trennt.
 
-### Kopplung
+### Kopplung (doubletake)
 
 Beim ersten Mal zeigt der Fernseher einen Code, den Schwupp über denselben
 Dialog abfragt wie das AirPlay-Pairing und dem Hilfsprogramm auf die
 Standardeingabe reicht. Der Code gilt nur für einen Versuch – bei jedem neuen
 Anlauf zeigt das Gerät einen neuen. Danach liegen die Zugangsdaten unter
 `~/.config/schwupp/doubletake-credentials.json`.
+
+
+---
+
+## Eigene AirPlay-Spiegelung (11/2026)
+
+doubletake bringt eine eigene Bildschirmaufnahme und eigene Encoder mit
+(NVENC, VA-API, OpenH264, x264). Auf einem Telefon hieße das x264 in Software
+bei 1080p – zu viel Last und Verzögerung –, dazu eine zweite Portal-Sitzung
+neben der Einwilligung über die Schnelleinstellung. Schwupp spricht das
+Protokoll deshalb selbst (`app/mirror/airplay_stream/`, Engine
+`app/mirror/airplay.py`) und nimmt Bild und Encoder aus derselben Kette wie
+beim Cast-Spiegeln, auf dem Telefon also den Hardware-Encoder. doubletake
+bleibt als Weg „AirPlay (doubletake)“ wählbar, wo es installiert ist – es
+überträgt auch den Ton, den die eigene Engine noch nicht sendet.
+
+### Ablauf
+
+1. `GET /info` im Klartext: Feature-Bits, Statusbits, Versionsstand.
+   Meldet ein Gerät FairPlay-SAP (Bit 14, Apple TV/Mac), bricht die Engine
+   mit einem Hinweis auf doubletake ab.
+2. **Pair-Verify** mit der gespeicherten Kopplung, sonst Pair-Setup mit PIN.
+   Fernseher anderer Hersteller koppeln mit `X-Apple-HKP: 3` – genau das tut
+   auch pyatv beim Verbinden. Deren Kopplung (`airplay_creds`) gilt deshalb
+   auch fürs Spiegeln: kein zweiter Code. Apple-Geräte wollen Typ 5 mit der
+   Freigabe `com.apple.ScreenCapture` im M5; diese Kopplung liegt getrennt
+   unter `airplay_mirror_creds`.
+3. Danach läuft der Steuerkanal in HAP-Rahmen (ChaCha20-Poly1305, Schlüssel
+   `Control-Salt`/`Control-Write-…`/`Control-Read-…`).
+4. `SETUP` der Sitzung zuerst; antwortet der Empfänger mit 455 (oder 400/405/
+   406/415/501), kommt die ältere Reihenfolge, in der der Ton-Stream die
+   Sitzung anlegt. Der Ton-Stream (Typ 96, ALAC) ist nur ein Platzhalter, es
+   folgen keine Pakete – Empfänger erwarten ihn trotzdem und verlangen über
+   den verschlüsselten Kanal einen eigenen 32-Byte-Schlüssel (`shk`).
+5. Video-`SETUP` (Typ 110) → `dataPort`, TCP dorthin, `RECORD`.
+6. Je Bild ein 128-Byte-Kopf (Länge, Typ, Schlüsselbild-Flag, Zeitstempel,
+   Zeitachse) und die H.264-Daten als AVCC, mit ChaCha20-Poly1305
+   verschlüsselt; der Kopf ist AAD, die Nonce zählt je Bild hoch. Der
+   Schlüssel: HKDF-SHA512 über das Pair-Verify-Geheimnis,
+   Salt `DataStream-Salt<streamConnectionID>`,
+   Info `DataStream-Output-Encryption-Key`. SPS/PPS gehen als avcC
+   unverschlüsselt voraus (Typ 1), bei jeder Änderung erneut.
+7. Am Leben halten: `POST /feedback` alle 2 s, Heartbeat (Typ 2) jede Sekunde
+   auf dem Datenkanal, Antworten auf die Zeitanfragen des Empfängers.
+
+### Uhr
+
+- **NTP:** Der Empfänger fragt unseren Zeitport (fester Bereich
+  60000–60010, siehe oben) ab; die Antworten tragen die Uhr seit dem
+  Systemstart mit NTP-Epoche, die Bildzeitstempel dieselbe Uhr ohne Epoche
+  plus Wiedergabepuffer (`mirror_target_delay_ms`).
+- **PTP:** Empfänger mit Bit 41 und Version ≥ 354.54.6. Ein eigener PTP-Dienst
+  ist nicht nötig: `X-Apple-RequestReceivedTimestamp` + `X-Apple-ProcessingTime`
+  in den Antworten verankern die Uhr, `timingPeerInfo.ClockID` nennt die
+  Zeitachse (Kopf-Bytes 40–47). Kommt keine Uhr, gibt es einen neuen Versuch
+  mit NTP auf frischer Verbindung, wie ihn auch echte Sender machen.
+
+### Geprüft
+
+Schlüsselableitung, verschlüsseltes Bild, avcC, Kanalschlüssel und
+Zeitstempel sind byte-genau gegen doubletake abgeglichen (Testvektoren in
+`tests/test_airplay_stream.py`). Ganze Sitzungen laufen in den Tests gegen
+einen Empfänger in Python, der jedes Bild entschlüsselt, und wurden gegen
+doubletakes eigenen Test-Empfänger (Profil eines LG-Fernsehers: HKP 3, PTP
+ohne Anker → NTP) geprüft, ebenso die Weiternutzung einer pyatv-Kopplung.

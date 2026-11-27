@@ -1,73 +1,38 @@
-"""AirPlay-Mirror-Engine auf Basis von ``doubletake``.
+"""AirPlay-Bildschirmspiegelung – eigenes Protokoll, eigene Aufnahme.
 
-Warum ein Hilfsprogramm statt des eigenen Capture-Stacks? AirPlay-Spiegelung
-ist ein eigenes Protokoll (RTSP + verschlüsselter Videostrom, SRP-6a-Pairing,
-ChaCha20-Poly1305) – und für Nicht-Apple-Sender bis vor kurzem gar nicht
-verfügbar. ``doubletake`` implementiert es; Schwupp ruft es so auf, wie es auch
-``wf-recorder`` und ``yt-dlp`` einbindet: als eigenständiges Programm mit
-klarer Schnittstelle.
+Spiegelt auf AirPlay-Fernseher (Hisense, Samsung, Sony, Roku, Apple TV …)
+ohne Hilfsprogramm: Kopplung, Sitzung und Videostrom stecken in
+:mod:`.airplay_stream`, Bild und Encoder kommen aus derselben Kette wie beim
+Cast-Spiegeln (Portal/X11 → Hardware- oder Software-H.264). Auf dem Telefon
+heißt das: Hardware-Encoder statt x264 in Software.
 
-Das bedeutet zugleich: Diese Engine bringt **ihre eigene** Bildschirmaufnahme
-und ihr eigenes Encoding mit. Sie nutzt daher nicht die Capture-Kette der
-Basisklasse, sondern startet den Prozess direkt.
+Kopplung: Fernseher anderer Hersteller nehmen dieselbe HAP-Kopplung wie die
+Wiedergabe über pyatv – die beim Verbinden gespeicherte gilt also auch hier,
+der Fernseher fragt nicht zweimal nach einem Code. Fehlt sie oder gilt sie
+nicht mehr, zeigt der Fernseher einen Code, den derselbe Dialog abfragt.
 
-Gerätekopplung: Beim ersten Mal zeigt der Fernseher eine PIN, die über den
-``pin_callback`` des Receivers abgefragt und dem Prozess auf die Standardeingabe
-gereicht wird. Die Zugangsdaten landen neben der App-Konfiguration und werden
-danach wiederverwendet.
+Netzwerk: Bei NTP-Empfängern fragt der Fernseher während des Aufbaus per UDP
+unsere Uhr ab. Dafür gilt ein fester Portbereich (:data:`PORT_RANGE`), damit
+sich eine Firewall-Regel angeben lässt (siehe docs/MIRRORING.md).
 
-Netzwerk: Der Empfänger prüft während des Verbindungsaufbaus per UDP einen
-Zeitsynchronisations-Port beim Sender. Wird der von einer Firewall verworfen,
-kommt die Sitzung zwar zustande, aber **es erscheint kein Bild** – ein
-Fehlerbild, das sich nur schwer von einem Codec-Problem unterscheiden lässt.
-Deshalb wird ein fester, dokumentierbarer Portbereich verwendet (siehe
-:data:`PORT_RANGE` und docs/MIRRORING.md).
+Ton überträgt diese Engine noch nicht; der Ton-Stream wird nur als Platzhalter
+angemeldet, wie es die Empfänger erwarten.
 """
 from __future__ import annotations
 
 import contextlib
-import os
-import shutil
-import subprocess
+import socket
 import threading
-from pathlib import Path
+import time
 
-from .engine import MirrorEngine
+from .airplay_stream import hap
+from .airplay_stream.session import MirrorSession, PtpUnavailable
+from .capture import h264_encoder_desc, retime_portal_source
+from .engine import MirrorEngine, gst_init
 
-# Fester UDP-Bereich für Timing/Audio – so lässt sich eine Firewall-Regel
-# angeben, statt zufällige Ports freigeben zu müssen. Drei Ports sind das
-# Minimum je gleichzeitigem Empfänger.
-PORT_RANGE = "60000-60010"
-
-# H.264 statt HEVC: Mit HEVC verlangt das Protokoll die größte Fläche, die der
-# Empfänger meldet – beim getesteten Hisense also 4K. Das Gerät nahm den Strom
-# dann zwar an, zeigte aber nur ein Standbild. Mit H.264 (1080p) läuft er rund.
-# Wer einen Empfänger hat, der HEVC sauber dekodiert, stellt "hevc" ein.
-DEFAULT_CODEC = "h264"
-
-_BINARY = "doubletake"
-_START_TIMEOUT = 60.0   # s, bis "mirror session ready" erscheint
-_PIN_PROMPT = "Enter the PIN"
-_READY_MARKER = "mirror session ready"
-_PAIRED_MARKER = "pairing complete"
-
-
-def _find_binary() -> str | None:
-    """Sucht doubletake: erst die Umgebungsvariable, dann PATH, dann /app/bin."""
-    override = os.environ.get("SCHWUPP_DOUBLETAKE")
-    if override and os.access(override, os.X_OK):
-        return override
-    found = shutil.which(_BINARY)
-    if found:
-        return found
-    bundled = Path("/app/bin") / _BINARY      # Flatpak
-    return str(bundled) if os.access(bundled, os.X_OK) else None
-
-
-def credentials_path(config) -> Path:  # noqa: ANN001
-    """Ablage der Kopplungsdaten – neben der App-Konfiguration."""
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return Path(base) / "schwupp" / "doubletake-credentials.json"
+PORT_RANGE = (60000, 60010)
+FREEZE_TIMEOUT_S = 4.0
+MAX_RECOVERIES = 5
 
 
 class AirplayMirrorEngine(MirrorEngine):
@@ -77,139 +42,205 @@ class AirplayMirrorEngine(MirrorEngine):
     def __init__(self, receiver, server, config, on_error=None,
                  on_started=None) -> None:  # noqa: ANN001
         super().__init__(receiver, server, config, on_error, on_started)
-        self._proc: subprocess.Popen | None = None
-        self._reader: threading.Thread | None = None
+        self._session: MirrorSession | None = None
+        self._pipeline = None
+        self._Gst = None
+        self._source_desc = ""
+        self._size = (0, 0)
+        self._last_frame = 0.0
+        self._recovering = False
+        self._recover_times: list[float] = []
 
     @staticmethod
     def check_available() -> tuple[bool, str]:
-        if _find_binary() is None:
-            return False, ("doubletake ist nicht installiert – es überträgt den "
-                           "Bildschirm per AirPlay (siehe BUILDING.md)")
+        from .capture import available_encoders, capture_available
+
+        if not available_encoders():
+            return False, ("Kein H.264-Encoder in GStreamer gefunden "
+                           "(x264enc aus gst-plugins-ugly empfohlen)")
+        try:
+            import cryptography  # noqa: F401
+        except ImportError:
+            return False, "Python-Paket 'cryptography' fehlt"
+        ok, detail = capture_available()
+        if not ok:
+            return False, detail
         return True, "Bereit"
 
-    # -- Start ---------------------------------------------------------------
+    # -- Kopplungsdaten --------------------------------------------------------
+    def _host(self) -> str:
+        return str(self.receiver.host)
+
+    def _stored(self, key: str) -> hap.Credentials | None:
+        return hap.Credentials.parse((self.config[key] or {}).get(self._host()))
+
+    def _credentials(self) -> hap.Credentials | None:
+        """Erst die eigene Spiegel-Kopplung, dann die der Wiedergabe (pyatv)."""
+        return self._stored("airplay_mirror_creds") or self._stored("airplay_creds")
+
+    def _store_credentials(self, creds: hap.Credentials, legacy: bool) -> None:
+        # HKP-3-Kopplungen teilt sich die Engine mit der Wiedergabe über pyatv;
+        # die eigene (Typ 5) bekommt einen eigenen Platz, pyatv kennt sie nicht.
+        key = "airplay_creds" if legacy else "airplay_mirror_creds"
+        stored = dict(self.config[key] or {})
+        stored[self._host()] = str(creds)
+        self.config[key] = stored
+        with contextlib.suppress(Exception):
+            self.config.save()
+
+    # -- Start ----------------------------------------------------------------
     def start(self) -> None:
-        """Startet die Spiegelung.
-
-        Überschreibt die Basisklasse: doubletake nimmt den Bildschirm selbst
-        auf, eine Capture-Quelle von Schwupp wird also nicht gebraucht.
-        """
-        if self._running:
+        if getattr(self.receiver, "kind", None) != "airplay":
+            self.fail("AirPlay-Spiegelung ist nur für AirPlay-Geräte verfügbar")
             return
-        self._running = True
-        threading.Thread(target=self._run_guarded, args=("",), daemon=True,
-                         name="mirror-airplay").start()
+        super().start()
+        threading.Thread(target=self._watchdog_loop, daemon=True,
+                         name="mirror-airplay-watchdog").start()
 
-    def run(self, source_desc: str) -> None:  # noqa: ARG002
-        binary = _find_binary()
-        if binary is None:
-            raise RuntimeError(self.check_available()[1])
-
-        creds = credentials_path(self.config)
-        creds.parent.mkdir(parents=True, exist_ok=True)
-        first_pairing = not creds.exists()
-
-        cmd = [binary, "-target", self.receiver.host, "-creds", str(creds),
-               "-port-range", PORT_RANGE, "-fps", str(self.cfg_int("mirror_fps", 30)),
-               "-video-codec", str(self.cfg("mirror_airplay_codec") or DEFAULT_CODEC)]
-        bitrate = self.cfg_int("mirror_bitrate_kbps", 0)
-        if bitrate:
-            cmd += ["-bitrate", str(bitrate)]
-        latency = self.cfg_int("mirror_target_delay_ms", 0)
-        if latency:
-            cmd += ["-target-latency-ms", str(latency)]
-        if not self.cfg("mirror_audio"):
-            cmd.append("-no-audio")
-        if first_pairing:
-            cmd.append("-pair")
-
-        self._proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1,
+    def _new_session(self, force_ntp: bool = False) -> MirrorSession:
+        return MirrorSession(
+            self._host(),
+            credentials=self._credentials(),
+            store_credentials=self._store_credentials,
+            pin_callback=getattr(self.receiver, "pin_callback", None),
+            name=socket.gethostname() or "Schwupp",
+            port_range=PORT_RANGE,
+            latency_ms=self.cfg_int("mirror_target_delay_ms", 150),
+            force_ntp=force_ntp,
+            on_failure=self._on_session_failure,
         )
-        self._await_ready(first_pairing)
 
-    def _await_ready(self, first_pairing: bool) -> None:
-        """Liest die Ausgabe mit, beantwortet die PIN-Abfrage und wartet auf den
-        Start der Sitzung. Danach läuft der Prozess weiter, bis :meth:`stop`."""
-        import time
+    def run(self, source_desc: str) -> None:
+        self._source_desc = source_desc
+        width, height, fps, bitrate_kbps = self.video_params()
+        self._size = (width, height)
+        session = self._new_session()
+        self._session = session
+        try:
+            session.connect()
+            if not self._running:
+                session.close()
+                return
+            try:
+                session.setup(width, height)
+            except PtpUnavailable as exc:
+                # Manche Empfänger bieten PTP an und liefern dann keine Uhr –
+                # neue Verbindung mit NTP, wie es echte Sender auch tun.
+                print(f"[airplay] {exc} – neuer Versuch mit NTP")
+                session.close()
+                session = self._new_session(force_ntp=True)
+                self._session = session
+                session.connect()
+                session.setup(width, height)
+        except Exception:
+            session.close()
+            raise
+        if not self._running:
+            session.close()
+            return
+        self._launch_encoder(fps, bitrate_kbps)
 
-        proc = self._proc
-        assert proc is not None and proc.stdout is not None
-        deadline = time.monotonic() + _START_TIMEOUT
-        tail: list[str] = []
+    def _on_session_failure(self, message: str) -> None:
+        if self._running:
+            self.fail(message)
 
-        while self._running and time.monotonic() < deadline:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            tail.append(line.rstrip())
-            del tail[:-15]
-            if _PIN_PROMPT in line:
-                self._answer_pin()
+    # -- Encoder --------------------------------------------------------------
+    def _launch_encoder(self, fps: int, bitrate_kbps: int) -> None:
+        Gst = gst_init()
+        self._Gst = Gst
+        width, height = self._size
+        encoder = h264_encoder_desc(bitrate_kbps, fps, str(self.cfg("mirror_encoder") or "auto"))
+        desc = (
+            f"{self._source_desc} ! videoconvert ! videoscale add-borders=true "
+            f"! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1 "
+            f"! {encoder} "
+            f"! video/x-h264,profile=main,stream-format=byte-stream "
+            f"! h264parse config-interval=-1 "
+            f"! video/x-h264,stream-format=byte-stream,alignment=au "
+            f"! appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true async=false"
+        )
+        self._pipeline = Gst.parse_launch(desc)
+        retime_portal_source(self._pipeline, Gst)
+        self._pipeline.get_by_name("sink").connect("new-sample", self._on_sample)
+        bus = self._pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_bus_error)
+        self._pipeline.set_state(Gst.State.PLAYING)
+
+    def _on_bus_error(self, _bus, message) -> None:  # noqa: ANN001
+        err, _dbg = message.parse_error()
+        self.fail(f"GStreamer-Fehler beim Spiegeln: {err}")
+
+    def _on_sample(self, sink):  # noqa: ANN001
+        Gst = self._Gst
+        sample = sink.emit("pull-sample")
+        session = self._session
+        if sample is None or not self._running or session is None:
+            return Gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        ok, info = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            data = bytes(info.data)
+        finally:
+            buf.unmap(info)
+        # Zeitstempel = Sendezeitpunkt (wie beim Cast-Spiegeln): Das Kodieren
+        # dauert unterschiedlich lange, mit der Aufnahmezeit kämen die Bilder für
+        # den Fernseher unregelmäßig spät.
+        if session.send_access_unit(data):
+            self._last_frame = time.monotonic()
+        return Gst.FlowReturn.OK
+
+    # -- Selbstheilung: eingefrorene Aufnahme neu starten -----------------------
+    def _watchdog_loop(self) -> None:
+        while self._running:
+            time.sleep(2)
+            if self._recovering or not self._last_frame:
                 continue
-            if _READY_MARKER in line:
-                self._start_log_drain()
+            if time.monotonic() - self._last_frame > FREEZE_TIMEOUT_S:
+                self._recover()
+
+    def _recover(self) -> None:
+        now = time.time()
+        self._recover_times = [t for t in self._recover_times if now - t < 60]
+        if len(self._recover_times) >= MAX_RECOVERIES:
+            self.fail("Bildschirmaufnahme friert wiederholt ein – Spiegelung beendet")
+            return
+        self._recover_times.append(now)
+        self._recovering = True
+        print("[airplay] Aufnahme eingefroren – starte neu")
+        with contextlib.suppress(Exception):
+            if self._pipeline is not None:
+                self._pipeline.set_state(self._Gst.State.NULL)
+                self._pipeline = None
+        self._last_frame = 0.0
+        try:
+            source = self._capture.restart_sync() if self._capture else None
+            if source is None:
+                self.fail("Bildschirmaufnahme abgebrochen – bitte erneut starten "
+                          "(Freigabe muss neu bestätigt werden)")
                 return
-        if proc.poll() is not None or not self._running:
-            raise RuntimeError(self._explain("\n".join(tail)))
-        raise RuntimeError("AirPlay-Spiegelung kam nicht zustande "
-                           f"(Zeitüberschreitung):\n{tail[-1] if tail else ''}")
+            self._source_desc = source
+            _w, _h, fps, bitrate_kbps = self.video_params()
+            # Sitzung und Datenkanal bleiben stehen; der neue Encoder beginnt
+            # mit einem Schlüsselbild und eigener Konfiguration.
+            if self._session is not None:
+                self._session.restart_video()
+            self._launch_encoder(fps, bitrate_kbps)
+        except Exception as exc:  # noqa: BLE001
+            self.fail(f"Neustart der Bildschirmaufnahme fehlgeschlagen: {exc}")
+        finally:
+            self._recovering = False
 
-    def _answer_pin(self) -> None:
-        """Fragt die am Fernseher angezeigte PIN ab und reicht sie durch."""
-        ask = getattr(self.receiver, "pin_callback", None)
-        if ask is None:
-            raise RuntimeError("Der Fernseher verlangt einen Code, es steht aber "
-                               "kein Eingabefeld zur Verfügung")
-        pin = ask()
-        if not pin:
-            raise RuntimeError("Kopplung abgebrochen")
-        proc = self._proc
-        if proc is not None and proc.stdin is not None:
-            proc.stdin.write(f"{pin.strip()}\n")
-            proc.stdin.flush()
-
-    def _start_log_drain(self) -> None:
-        """Liest die weitere Ausgabe weg, damit die Pipe nicht volläuft, und
-        meldet ein unerwartetes Ende der Übertragung."""
-        def drain() -> None:
-            proc = self._proc
-            if proc is None or proc.stdout is None:
-                return
-            last = ""
-            for line in proc.stdout:
-                last = line.rstrip()
-            if self._running:       # nicht von uns beendet
-                self.fail(f"AirPlay-Spiegelung abgebrochen: {last}" if last
-                          else "AirPlay-Spiegelung abgebrochen")
-
-        self._reader = threading.Thread(target=drain, daemon=True,
-                                        name="mirror-airplay-log")
-        self._reader.start()
-
-    @staticmethod
-    def _explain(output: str) -> str:
-        """Macht aus der Programmausgabe eine Meldung, mit der man etwas anfangen kann."""
-        lowered = output.lower()
-        if "error: 2" in lowered or "pairing failed" in lowered:
-            return ("Kopplung fehlgeschlagen – der Code stimmte nicht oder war "
-                    "abgelaufen. Der Fernseher zeigt bei jedem Versuch einen neuen.")
-        if "connection refused" in lowered or "no route to host" in lowered:
-            return "Der Fernseher ist nicht erreichbar"
-        if "credential" in lowered and "empty" in lowered:
-            return "Es wurde kein Code eingegeben"
-        return f"AirPlay-Spiegelung fehlgeschlagen:\n{output[-400:]}"
-
-    # -- Stop ----------------------------------------------------------------
+    # -- Stop -----------------------------------------------------------------
     def stop(self) -> None:
         self._running = False
-        proc, self._proc = self._proc, None
-        if proc is None:
-            return
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:  # noqa: BLE001
+        pipeline, self._pipeline = self._pipeline, None
+        if pipeline is not None:
             with contextlib.suppress(Exception):
-                proc.kill()
+                pipeline.set_state(self._Gst.State.NULL)
+        session, self._session = self._session, None
+        if session is not None:
+            session.close()
+        self._stop_capture()

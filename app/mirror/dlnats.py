@@ -91,7 +91,7 @@ class DlnaTsMirrorEngine(MirrorEngine):
 
         bus = self._pipeline.get_bus()
         bus.add_signal_watch()
-        bus.connect("message::error", self._on_error)
+        bus.connect("message::error", self._on_bus_error)
 
         self._pipeline.set_state(Gst.State.PLAYING)
         # TV den Live-Stream öffnen lassen (DLNA SetAVTransportURI + Play)
@@ -111,7 +111,7 @@ class DlnaTsMirrorEngine(MirrorEngine):
                     buf.unmap(info)
         return self._Gst.FlowReturn.OK
 
-    def _on_error(self, _bus, message) -> None:  # noqa: ANN001
+    def _on_bus_error(self, _bus, message) -> None:  # noqa: ANN001
         err, _dbg = message.parse_error()
         self.fail(f"GStreamer-Fehler beim Spiegeln: {err}")
 

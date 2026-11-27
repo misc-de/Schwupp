@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.7.0" date="2026-11-28">
+      <description>
+        <p>Schwupp mirrors to AirPlay TVs on its own: no helper program, the same screen capture and hardware encoder as for Cast, and the pairing made when connecting also covers mirroring. Sound while mirroring to AirPlay still needs doubletake, which stays selectable per TV. Picture errors when mirroring as HLS or DLNA stream now show up in the window.</p>
+        <p xml:lang="de">Schwupp spiegelt selbst auf AirPlay-Fernseher: ohne Hilfsprogramm, mit derselben Bildschirmaufnahme und demselben Hardware-Encoder wie bei Cast, und die Kopplung vom Verbinden gilt auch fürs Spiegeln. Für den Ton beim Spiegeln auf AirPlay braucht es noch doubletake, das je Fernseher wählbar bleibt. Bildfehler beim Spiegeln als HLS- oder DLNA-Stream erscheinen jetzt im Fenster.</p>
+      </description>
+    </release>
     <release version="0.6.5" date="2026-11-25">
       <description>
         <p>Safer with devices on the network: speaker names can no longer change the AirPlay sound configuration, device descriptions are only read from the device itself and up to 1 MiB, and the settings with the TV keys are readable only by you. Only video and audio files are shared, device names with an ampersand show up again.</p>

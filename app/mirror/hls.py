@@ -103,7 +103,7 @@ class HlsMirrorEngine(MirrorEngine):
 
         bus = self._pipeline.get_bus()
         bus.add_signal_watch()
-        bus.connect("message::error", self._on_error)
+        bus.connect("message::error", self._on_bus_error)
 
         self._pipeline.set_state(Gst.State.PLAYING)
 
@@ -141,7 +141,7 @@ class HlsMirrorEngine(MirrorEngine):
             time.sleep(0.3)
         return False
 
-    def _on_error(self, _bus, message) -> None:  # noqa: ANN001
+    def _on_bus_error(self, _bus, message) -> None:  # noqa: ANN001
         err, _dbg = message.parse_error()
         self.fail(f"GStreamer-Fehler beim Spiegeln: {err}")
 

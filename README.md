@@ -38,9 +38,9 @@ the fallback for unsupported locales).
 | Web videos | ✅ | ✅ | † |
 | Play / pause / stop, volume | ✅ | ✅ | — |
 | Screen mirroring (native, < 1 s) | ✅ | ✅ | — |
-| Screen mirroring (AirPlay, with sound) | — | — | ✅ |
+| Screen mirroring (AirPlay) | — | — | ✅ |
 | Screen mirroring (HLS) | ✅ | ✅ | † |
-| Sound while mirroring | ✅ | ✅ | ✅ |
+| Sound while mirroring | ✅ | ✅ | ✅ (with doubletake) |
 
 **†** depends on the individual TV. Many AirPlay sets take only audio and refuse
 every video request — including YouTube and HLS mirroring, which both arrive as a
@@ -53,8 +53,8 @@ work just like a Chromecast, including screen mirroring.
 
 **AirPlay 2 TVs** (Hisense/VIDAA, Samsung Tizen, Sony, older non-Cast models …) pair
 with the code shown on the TV the first time you connect; the pairing is stored, so
-this happens only once. Screen mirroring uses a separate protocol and therefore asks
-for its own code once — see [Screen mirroring](#screen-mirroring) below.
+this happens only once. Screen mirroring uses the same pairing on these TVs; Apple
+devices ask for a separate one — see [Screen mirroring](#screen-mirroring) below.
 
 Do not trust what these TVs advertise: the tested Hisense claims AirPlay video and
 refuses every playback request — yet mirroring to it works, with sound. On such a
@@ -71,12 +71,17 @@ volume control. (Screen mirroring on these needs a Chromecast.)
 Mirror your desktop to the TV. (Curious how it works? See
 [docs/MIRRORING.md](docs/MIRRORING.md).)
 
-On **AirPlay TVs** this uses the AirPlay mirroring protocol by way of
-[doubletake](https://github.com/omarroth/doubletake), which the Flatpak bundles.
-Two things are worth knowing: the TV shows a one-time code the first time, and
-the receiver probes a UDP timing port on your machine during setup. If a
-firewall drops that, the session comes up but **no picture ever appears** — so
-allow the range Schwupp uses:
+On **AirPlay TVs** Schwupp speaks the AirPlay mirroring protocol itself, with
+the same screen capture and hardware encoder as for Cast — on a phone that means
+no software encoding. It carries the picture; for the sound as well, install
+[doubletake](https://github.com/omarroth/doubletake) (the Flatpak bundles it) and
+pick “AirPlay (doubletake)” for that TV in the settings. Apple TVs and Macs
+require FairPlay and therefore need doubletake.
+
+The pairing made when connecting covers mirroring too, so the TV asks for its
+code only once. The receiver probes a UDP timing port on your machine during
+setup. If a firewall drops that, the session comes up but **no picture ever
+appears** — so allow the range Schwupp uses:
 
 ```bash
 sudo ufw allow from <TV-IP> proto udp to any port 60000:60010 comment 'AirPlay Mirroring'
@@ -101,7 +106,8 @@ app/
   dlna.py          minimal UPnP-AVTransport client
   server/          local HTTP server (files w/ Range, HLS, live stream)
   sources/         YouTube / web video (yt-dlp)
-  mirror/          pluggable mirror engines (native, hls, dlnats)
+  mirror/          pluggable mirror engines (native, airplay, doubletake, hls, dlnats)
+    airplay_stream/  AirPlay mirroring protocol: HAP pairing, RTSP, video stream
   service.py       D-Bus interface for shell quick settings (no window)
   speaker/         all sound of the device to Cast, Sonos, DLNA, AirPlay speakers
   paths.py         locates VERSION/lang (git checkout, prefix, Flatpak)
@@ -244,13 +250,13 @@ Schwupp stands on the shoulders of these projects:
 | [pyatv](https://github.com/postlund/pyatv) | AirPlay 2 pairing & playback (Hisense, Samsung …) | MIT |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | web video extraction (fallback) | Unlicense |
 | [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) | mDNS service discovery | LGPL-2.1 |
-| [cryptography](https://github.com/pyca/cryptography) | AES-128-CTR for the native mirror | Apache-2.0 / BSD |
+| [cryptography](https://github.com/pyca/cryptography) | AES-128-CTR for the native mirror; X25519, Ed25519 and ChaCha20-Poly1305 for AirPlay mirroring | Apache-2.0 / BSD |
 | [requests](https://github.com/psf/requests) | HTTP for the updater | Apache-2.0 |
 | [PyGObject](https://pygobject.gnome.org/) · [GTK4](https://gtk.org/) · [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) | the user interface | LGPL |
 | [GStreamer](https://gstreamer.freedesktop.org/) | screen capture & H.264 encoding | LGPL |
 | [PipeWire](https://pipewire.org/) · [xdg-desktop-portal](https://github.com/flatpak/xdg-desktop-portal) | Wayland screen capture (ScreenCast portal) | MIT / LGPL-2.1 |
 | [x264](https://www.videolan.org/developers/x264.html) · [OpenH264](https://github.com/cisco/openh264) | H.264 encoders used through GStreamer / wf-recorder | GPL-2.0 / BSD-2-Clause |
-| [doubletake](https://github.com/omarroth/doubletake) | AirPlay screen mirroring (the protocol pyatv does not speak) | LGPL-3.0 |
+| [doubletake](https://github.com/omarroth/doubletake) | optional AirPlay mirroring with sound; its findings showed which way TVs without FairPlay accept | LGPL-3.0 |
 | [wf-recorder](https://github.com/ammen99/wf-recorder) | Wayland capture where no screen-cast portal exists | MIT |
 | [LAME](https://lame.sourceforge.io/) | MP3 encoding of the sound for speakers (through GStreamer) | LGPL-2.0 |
 | [Emilia](https://github.com/misc-de/emilia) | how Sonos, DLNA and Cast speakers take a live stream (ported to Python by the same author) | GPL-3.0-or-later |
@@ -270,6 +276,8 @@ was long considered impossible without FairPlay, Apple's DRM. That it works here
 rests on years of reverse engineering by the
 [UxPlay](https://github.com/antimof/UxPlay) and
 [RPiPlay](https://github.com/fd-/rpiplay) projects, which `doubletake` builds on.
+Schwupp's own implementation of the protocol (`app/mirror/airplay_stream/`)
+follows those public findings; no code was copied.
 
 ## License
 
