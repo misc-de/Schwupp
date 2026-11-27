@@ -143,3 +143,31 @@ def test_mirroring_and_media_remain():
     recv, _ = _receiver()
     assert recv.supports(Feature.MEDIA) is True
     assert recv.supports(Feature.MIRROR_AIRPLAY) is True
+
+
+def test_release_closes_the_playback_session_without_commands():
+    """Vor der eigenen Spiegelung gibt der Empfänger seine Sitzung frei: Der
+    Hisense setzt eine zweite Verbindung desselben Senders zurück. Ein
+    Stop-Befehl ginge dabei an den Fernseher – release() schickt keinen."""
+    recv, _ = _receiver()
+    calls = []
+
+    class _Remote:
+        async def stop(self):
+            calls.append("stop")
+
+    class _Atv:
+        remote_control = _Remote()
+
+        def close(self):
+            calls.append("close")
+
+    recv._ensure_loop()
+    recv._atv = _Atv()
+    try:
+        recv.release()
+        assert calls == ["close"] and recv._atv is None
+        recv.release()                      # ohne Sitzung: nichts zu tun
+        assert calls == ["close"]
+    finally:
+        recv.disconnect()

@@ -125,6 +125,11 @@ class FakeReceiver:
                 conn, _ = self._sock.accept()
             except OSError:
                 return
+            if self.knobs.get("reset_first"):
+                self.knobs["reset_first"] -= 1
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                conn.close()                        # RST statt Antwort, wie der Hisense
+                continue
             threading.Thread(target=self._control, args=(conn,), daemon=True).start()
 
     def info(self) -> dict:

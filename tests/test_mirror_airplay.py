@@ -138,6 +138,17 @@ def fake_session(monkeypatch):
     return _FakeSession
 
 
+def test_the_playback_session_is_released_before_mirroring(fake_session, monkeypatch):
+    engine, _ = _engine()
+    order = []
+    engine.receiver.release = lambda: order.append("release")
+    monkeypatch.setattr(airplay, "RELEASE_PAUSE_S", 0)
+    monkeypatch.setattr(fake_session, "connect", lambda self: order.append("connect"))
+    monkeypatch.setattr(engine, "_launch_encoder", lambda *a: None)
+    engine.run("src")
+    assert order == ["release", "connect"]
+
+
 def test_run_connects_negotiates_and_starts_the_encoder(fake_session, monkeypatch):
     engine, _ = _engine(airplay_creds={"192.0.2.40": str(CREDS)})
     launched = []

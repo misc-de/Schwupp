@@ -304,6 +304,21 @@ class AirplayReceiver(Receiver):
                 asyncio.run_coroutine_threadsafe(
                     self._close_atv(atv), self._loop).result(5)
 
+    def release(self) -> None:
+        """Gibt die AirPlay-Sitzung frei, ohne der Wiedergabe etwas zu befehlen.
+
+        Fernseher wie der Hisense nehmen je Sender nur eine Sitzung an und
+        setzen eine zweite Verbindung sofort zurück. Die eigene Spiegelung
+        (app/mirror/airplay.py) ruft das deshalb vor ihrem Aufbau; die
+        Wiedergabe verbindet sich beim nächsten play_media von selbst neu.
+        """
+        self._cancel_stream()
+        if self._atv is not None and self._loop is not None:
+            atv, self._atv = self._atv, None
+            with contextlib.suppress(Exception):
+                asyncio.run_coroutine_threadsafe(
+                    self._close_atv(atv), self._loop).result(5)
+
     def supports(self, feature: str) -> bool:
         if feature == Feature.VIDEO:
             return self._video_supported()

@@ -68,6 +68,8 @@ _AUDIO_SPF = 352
 _AUDIO_FORMAT_ALAC = 0x40000
 
 _FEEDBACK_INTERVAL = 2.0
+_OPEN_ATTEMPTS = 2
+_OPEN_RETRY_DELAY = 1.5
 _HEARTBEAT_INTERVAL = 1.0
 _PTP_ASYNC_WAIT = 2.0
 
@@ -360,15 +362,31 @@ class MirrorSession:
 
     # -- Verbindung + Kopplung ------------------------------------------------
     def _open(self) -> None:
-        if self.rtsp is not None:
-            self.rtsp.close()
-        try:
-            self.rtsp = RtspClient(self.host, self.port)
-        except OSError as exc:
-            raise MirrorError(f"Der Fernseher ist nicht erreichbar ({exc})") from exc
-        response = self.rtsp.request("GET", "/info", timeout=10)
+        """Neue Steuerverbindung und ``GET /info``.
+
+        Setzt der Fernseher die Verbindung gleich zurück – etwa weil er die
+        Sitzung eines anderen Senders gerade erst schließt –, gibt es nach
+        einer kurzen Pause einen zweiten Versuch.
+        """
+        for attempt in range(_OPEN_ATTEMPTS):
+            if self.rtsp is not None:
+                self.rtsp.close()
+            try:
+                self.rtsp = RtspClient(self.host, self.port)
+                response = self.rtsp.request("GET", "/info", timeout=10)
+                break
+            except (OSError, RtspError) as exc:
+                self.log(f"[airplay] GET /info, Versuch {attempt + 1}: {exc}")
+                if attempt + 1 == _OPEN_ATTEMPTS:
+                    raise MirrorError("Der Fernseher nimmt keine Verbindung an – läuft "
+                                      f"gerade eine andere AirPlay-Sitzung? ({exc})") from exc
+                time.sleep(_OPEN_RETRY_DELAY)
         self.server = response.headers.get("server", "")
         self.info = response.plist()
+        self.log(f"[airplay] {self.info.get('model', '?')} ({self.server or '?'}): "
+                 f"features {_features(self.info):#x}, status "
+                 f"{int(self.info.get('statusFlags', 0) or 0):#x}, "
+                 f"Version {self.info.get('sourceVersion', '?')}")
 
     @property
     def legacy_pairing(self) -> bool:
@@ -393,6 +411,7 @@ class MirrorSession:
         if self.credentials is not None:
             try:
                 self._verify(self.credentials)
+                self.log("[airplay] mit gespeicherter Kopplung angemeldet")
                 return
             except PairingRequired as exc:
                 self.log(f"[airplay] gespeicherte Kopplung gilt nicht: {exc} – neu koppeln")
@@ -437,6 +456,7 @@ class MirrorSession:
                                       allow_error=True)
             if start.status not in (200, 453):
                 raise MirrorError(f"Der Fernseher zeigt keinen Code an ({start.status})")
+            self.log(f"[airplay] Kopplung mit Code (Typ {pairing_type})")
             pin = self.pin_callback()
             if not pin:
                 raise MirrorError("Kopplung abgebrochen")

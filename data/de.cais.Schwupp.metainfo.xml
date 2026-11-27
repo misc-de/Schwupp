@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.7.2" date="2026-11-28">
+      <description>
+        <p>Mirroring to AirPlay TVs that take only one connection per device: the playback session is released first, and a connection the TV resets is tried once more.</p>
+        <p xml:lang="de">Spiegeln auf AirPlay-Fernseher, die je Gerät nur eine Verbindung annehmen: Die Wiedergabe-Sitzung wird vorher freigegeben, eine vom Fernseher zurückgesetzte Verbindung noch einmal versucht.</p>
+      </description>
+    </release>
     <release version="0.7.1" date="2026-11-28">
       <description>
         <p>Mirroring to AirPlay TVs carries the sound too: the system sound goes along as lossless ALAC, in step with the picture, and lost packets are sent again.</p>

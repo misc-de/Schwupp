@@ -38,6 +38,7 @@ from .engine import MirrorEngine, gst_init
 
 PORT_RANGE = (60000, 60010)
 FREEZE_TIMEOUT_S = 4.0
+RELEASE_PAUSE_S = 0.5
 MAX_RECOVERIES = 5
 
 
@@ -121,6 +122,12 @@ class AirplayMirrorEngine(MirrorEngine):
         self._source_desc = source_desc
         width, height, fps, bitrate_kbps = self.video_params()
         self._size = (width, height)
+        # Die Wiedergabe-Sitzung (pyatv) freigeben: Fernseher wie der Hisense
+        # setzen eine zweite Verbindung desselben Senders sofort zurück.
+        release = getattr(self.receiver, "release", None)
+        if release is not None:
+            release()
+            time.sleep(RELEASE_PAUSE_S)
         session = self._new_session()
         self._session = session
         try:

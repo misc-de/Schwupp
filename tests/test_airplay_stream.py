@@ -235,6 +235,7 @@ P_FRAME = AUD + b"\x00\x00\x01\x41\x9a\x02\x03"
 
 @pytest.fixture(autouse=True)
 def fast_intervals(monkeypatch):
+    monkeypatch.setattr(session, "_OPEN_RETRY_DELAY", 0.01)
     monkeypatch.setattr(session, "_HEARTBEAT_INTERVAL", 0.05)
     monkeypatch.setattr(session, "_FEEDBACK_INTERVAL", 0.05)
 
@@ -447,8 +448,32 @@ def test_status_errors_are_translated():
 
 
 def test_unreachable_receivers_are_named():
-    with pytest.raises(MirrorError, match="nicht erreichbar"):
+    with pytest.raises(MirrorError, match="keine Verbindung an"):
         MirrorSession("127.0.0.1", port=1, log=lambda _m: None).connect()
+
+
+def test_a_reset_first_connection_gets_a_second_try():
+    """Der Hisense setzte GET /info zurück, solange noch eine andere Sitzung lief."""
+    rx = FakeReceiver(reset_first=1)
+    logs = []
+    s = _session(rx, log=logs.append)
+    try:
+        s.connect()
+        assert s.rtsp.cipher is not None
+    finally:
+        s.close()
+        rx.close()
+    assert any("Versuch 1" in line for line in logs)
+    assert any("features" in line for line in logs)
+
+
+def test_two_resets_explain_the_likely_cause():
+    rx = FakeReceiver(reset_first=2)
+    try:
+        with pytest.raises(MirrorError, match="andere AirPlay-Sitzung"):
+            _session(rx).connect()
+    finally:
+        rx.close()
 
 
 # -- Fehlerfälle und seltenere Wege ---------------------------------------------
