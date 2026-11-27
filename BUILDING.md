@@ -19,9 +19,9 @@ Was Schwupp ist und wie man es bedient, steht im [README](README.md).
   `wf-recorder`
 - *optional:* `yt-dlp` für Web-Videos (wird sonst ins venv installiert)
 - *optional:* [`doubletake`](https://github.com/omarroth/doubletake) für die
-  Bildschirmspiegelung auf **AirPlay**-Fernseher *mit Ton* und auf Apple-Geräte
-  (FairPlay) – im Flatpak bereits enthalten. Das Bild allein überträgt Schwupp
-  selbst. Aus dem Quellbaum heraus muss doubletake einmal installiert werden –
+  Bildschirmspiegelung auf Apple-Geräte (FairPlay) – im Flatpak bereits
+  enthalten. Auf andere AirPlay-Fernseher spiegelt Schwupp selbst, samt Ton.
+  Aus dem Quellbaum heraus muss doubletake einmal installiert werden –
   Go ≥ 1.23 genügt, root ist nicht nötig:
 
   ```bash

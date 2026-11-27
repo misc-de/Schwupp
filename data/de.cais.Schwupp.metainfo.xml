@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.7.1" date="2026-11-28">
+      <description>
+        <p>Mirroring to AirPlay TVs carries the sound too: the system sound goes along as lossless ALAC, in step with the picture, and lost packets are sent again.</p>
+        <p xml:lang="de">Spiegeln auf AirPlay-Fernseher überträgt jetzt auch den Ton: Der Systemton geht verlustfrei als ALAC mit, im Takt des Bildes, verlorene Pakete werden erneut gesendet.</p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-11-28">
       <description>
         <p>Schwupp mirrors to AirPlay TVs on its own: no helper program, the same screen capture and hardware encoder as for Cast, and the pairing made when connecting also covers mirroring. Sound while mirroring to AirPlay still needs doubletake, which stays selectable per TV. Picture errors when mirroring as HLS or DLNA stream now show up in the window.</p>

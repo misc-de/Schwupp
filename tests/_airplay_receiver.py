@@ -85,6 +85,11 @@ class FakeReceiver:
         self.event_acks = threading.Event()
         self.teardowns = 0
         self.frame_errors: list[str] = []
+        self.audio_frames: list[tuple[int, int, int, bytes]] = []   # (pt, seq, rtp, Nutzlast)
+        self.audio_syncs: list[bytes] = []
+        self.audio_answers: list[bytes] = []
+        self.audio_ctrl: socket.socket | None = None
+        self.audio_sender_ctrl: tuple[str, int] | None = None
         self.close_data_after = 0       # nach so vielen Bildern den Datenkanal schließen
         self.got_frames = threading.Event()
         self._shared = b""
@@ -338,7 +343,19 @@ class FakeReceiver:
                 return 400, None, "encrypted audio descriptor omitted 32-byte shk", None
             if "streamConnections" in stream and self.reject_stream_connections:
                 return 400, None, "audio descriptor must use controlPort", None
-            response["streams"] = [{"type": 96, "dataPort": 50000, "controlPort": 50001}]
+            if self.knobs.get("no_audio_ports"):
+                response["streams"] = [{"type": 96}]
+                return 200, self._clock_headers(), response, None
+            data_port, ctrl_port = self._audio_server(stream["shk"], int(stream.get(
+                "controlPort") or stream.get("streamConnections", {}).get(
+                "streamConnectionTypeRTCP", {}).get("streamConnectionKeyPort", 0)))
+            if "streamConnections" in stream:
+                response["streams"] = [{"type": 96, "streamConnections": {
+                    "streamConnectionTypeRTP": {"streamConnectionKeyPort": data_port},
+                    "streamConnectionTypeRTCP": {"streamConnectionKeyPort": ctrl_port}}}]
+            else:
+                response["streams"] = [{"type": 96, "dataPort": data_port,
+                                        "controlPort": ctrl_port}]
             return 200, self._clock_headers(), response, None
         self._video_scid = int(stream["streamConnectionID"])
         if self.knobs.get("no_data_port"):
@@ -363,6 +380,60 @@ class FakeReceiver:
             sock.close()
         if reply[1] == 0xD3 and reply[8:16] == bytes(request[24:32]):
             self.ntp_answered.set()
+
+    def _audio_server(self, key: bytes, sender_ctrl_port: int) -> tuple[int, int]:
+        """Ton-Daten entschlüsseln (ChaCha20, Nonce hinten, AAD Zeit+SSRC) und
+        Sync-Pakete sowie Antworten auf Nachforderungen sammeln."""
+        from app.mirror.airplay_stream import audio as audio_mod
+
+        aead = ChaCha20Poly1305(key)
+        data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        data.bind(("127.0.0.1", 0))
+        ctrl = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        ctrl.bind(("127.0.0.1", 0))
+        self.audio_ctrl = ctrl
+        self.audio_sender_ctrl = ("127.0.0.1", sender_ctrl_port)
+
+        def open_packet(packet: bytes):  # noqa: ANN202
+            pt, seq, rtp = packet[1] & 0x7F, *struct.unpack(">HI", packet[2:8])
+            body, nonce = packet[12:-8], packet[-8:]
+            clear = audio_mod.red_header_length(body) if pt == audio_mod.PT_RED else 0
+            plain = aead.decrypt(b"\0" * 4 + nonce, body[clear:], packet[4:12])
+            return pt, seq, rtp, body[:clear] + plain
+
+        def run_data() -> None:
+            data.settimeout(5)
+            while not self._closing:
+                try:
+                    packet, _ = data.recvfrom(2048)
+                except OSError:
+                    return
+                try:
+                    self.audio_frames.append(open_packet(packet))
+                except Exception as exc:  # noqa: BLE001
+                    self.frame_errors.append(f"Ton: {exc!r}")
+
+        def run_ctrl() -> None:
+            ctrl.settimeout(5)
+            while not self._closing:
+                try:
+                    packet, _ = ctrl.recvfrom(2048)
+                except OSError:
+                    return
+                if packet[1] in (audio_mod.PT_SYNC_NTP, audio_mod.PT_SYNC_PTP):
+                    self.audio_syncs.append(packet)
+                else:
+                    self.audio_answers.append(packet)
+
+        threading.Thread(target=run_data, daemon=True).start()
+        threading.Thread(target=run_ctrl, daemon=True).start()
+        self.open_audio_packet = open_packet
+        return data.getsockname()[1], ctrl.getsockname()[1]
+
+    def request_audio(self, first: int, count: int) -> None:
+        """Fordert Ton-Pakete nach (0xd5), wie es ein Empfänger bei Verlust tut."""
+        self.audio_ctrl.sendto(struct.pack(">BBHHH", 0x80, 0xD5, 9, first, count),
+                               self.audio_sender_ctrl)
 
     def _timing_server(self) -> int:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

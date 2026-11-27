@@ -40,7 +40,7 @@ the fallback for unsupported locales).
 | Screen mirroring (native, < 1 s) | ✅ | ✅ | — |
 | Screen mirroring (AirPlay) | — | — | ✅ |
 | Screen mirroring (HLS) | ✅ | ✅ | † |
-| Sound while mirroring | ✅ | ✅ | ✅ (with doubletake) |
+| Sound while mirroring | ✅ | ✅ | ✅ |
 
 **†** depends on the individual TV. Many AirPlay sets take only audio and refuse
 every video request — including YouTube and HLS mirroring, which both arrive as a
@@ -73,10 +73,9 @@ Mirror your desktop to the TV. (Curious how it works? See
 
 On **AirPlay TVs** Schwupp speaks the AirPlay mirroring protocol itself, with
 the same screen capture and hardware encoder as for Cast — on a phone that means
-no software encoding. It carries the picture; for the sound as well, install
-[doubletake](https://github.com/omarroth/doubletake) (the Flatpak bundles it) and
-pick “AirPlay (doubletake)” for that TV in the settings. Apple TVs and Macs
-require FairPlay and therefore need doubletake.
+no software encoding — and the system sound as lossless ALAC. Apple TVs and Macs
+require FairPlay and therefore need [doubletake](https://github.com/omarroth/doubletake)
+(the Flatpak bundles it; pick “AirPlay (doubletake)” for that device in the settings).
 
 The pairing made when connecting covers mirroring too, so the TV asks for its
 code only once. The receiver probes a UDP timing port on your machine during
@@ -256,7 +255,7 @@ Schwupp stands on the shoulders of these projects:
 | [GStreamer](https://gstreamer.freedesktop.org/) | screen capture & H.264 encoding | LGPL |
 | [PipeWire](https://pipewire.org/) · [xdg-desktop-portal](https://github.com/flatpak/xdg-desktop-portal) | Wayland screen capture (ScreenCast portal) | MIT / LGPL-2.1 |
 | [x264](https://www.videolan.org/developers/x264.html) · [OpenH264](https://github.com/cisco/openh264) | H.264 encoders used through GStreamer / wf-recorder | GPL-2.0 / BSD-2-Clause |
-| [doubletake](https://github.com/omarroth/doubletake) | optional AirPlay mirroring with sound; its findings showed which way TVs without FairPlay accept | LGPL-3.0 |
+| [doubletake](https://github.com/omarroth/doubletake) | optional AirPlay mirroring to FairPlay devices; its findings showed which way TVs without FairPlay accept | LGPL-3.0 |
 | [wf-recorder](https://github.com/ammen99/wf-recorder) | Wayland capture where no screen-cast portal exists | MIT |
 | [LAME](https://lame.sourceforge.io/) | MP3 encoding of the sound for speakers (through GStreamer) | LGPL-2.0 |
 | [Emilia](https://github.com/misc-de/emilia) | how Sonos, DLNA and Cast speakers take a live stream (ported to Python by the same author) | GPL-3.0-or-later |

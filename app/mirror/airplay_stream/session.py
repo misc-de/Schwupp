@@ -6,9 +6,9 @@ Ablauf einer Sitzung (Steuerkanal TCP 7000, danach HAP-verschlüsselt):
    Versionsstand, Bildschirmgröße).
 2. Pair-Verify mit der gespeicherten Kopplung, sonst Pair-Setup mit der PIN,
    die der Fernseher zeigt (:mod:`.hap`).
-3. ``SETUP`` der Sitzung (Uhr: NTP oder PTP), dann ein Ton-Stream als
-   Platzhalter (Typ 96, ohne Pakete – Empfänger erwarten ihn), dann der
-   Videostrom (Typ 110). Empfänger, die die Sitzung nicht vor den Streams
+3. ``SETUP`` der Sitzung (Uhr: NTP oder PTP), dann der Ton-Stream (Typ 96,
+   ALAC; ohne Ton ein Platzhalter ohne Pakete – Empfänger erwarten ihn), dann
+   der Videostrom (Typ 110). Empfänger, die die Sitzung nicht vor den Streams
    annehmen, bekommen die ältere Reihenfolge (Ton-Stream legt die Sitzung an).
 4. TCP zum ``dataPort``: je Bild ein 128-Byte-Kopf und die H.264-Daten in
    AVCC, mit ChaCha20-Poly1305 verschlüsselt (Kopf = AAD). SPS/PPS gehen
@@ -40,6 +40,7 @@ from collections.abc import Callable
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from . import hap
+from .audio import FEATURE_RFC2198, AudioSender, receiver_takes_alac
 from .h264 import Packetizer
 from .rtsp import RtspClient, RtspError, StatusError
 
@@ -234,6 +235,22 @@ def display_size(info: dict) -> tuple[int, int]:
     return 0, 0
 
 
+def audio_ports(response: dict) -> tuple[int, int]:
+    """Daten- und Steuerport des Ton-Streams aus einer SETUP-Antwort."""
+    for stream in response.get("streams") or []:
+        if not isinstance(stream, dict) or int(stream.get("type", 0)) != 96:
+            continue
+        data, control = int(stream.get("dataPort") or 0), int(stream.get("controlPort") or 0)
+        connections = stream.get("streamConnections")
+        if isinstance(connections, dict):
+            rtp = connections.get("streamConnectionTypeRTP") or {}
+            rtcp = connections.get("streamConnectionTypeRTCP") or {}
+            data = int(rtp.get("streamConnectionKeyPort") or data)
+            control = int(rtcp.get("streamConnectionKeyPort") or control)
+        return data, control
+    return 0, 0
+
+
 def mac_from_uuid(value: str) -> str:
     digits = value.replace("-", "").lower()[:12].ljust(12, "0")
     parts = ["02"] + [digits[i:i + 2] for i in range(2, 12, 2)]
@@ -337,6 +354,9 @@ class MirrorSession:
         self._closing = threading.Event()
         self._failed = False
         self.frames_sent = 0
+        self.audio: AudioSender | None = None
+        self._audio_key = b""
+        self._audio_ports = (0, 0)
 
     # -- Verbindung + Kopplung ------------------------------------------------
     def _open(self) -> None:
@@ -494,8 +514,13 @@ class MirrorSession:
             self.session_uri = uri
         return response.plist(), response.headers, boot_ns()
 
-    def setup(self, width: int, height: int) -> None:
-        """Handelt Sitzung, Ton-Platzhalter und Videostrom aus und öffnet den Datenkanal."""
+    def setup(self, width: int, height: int, audio: bool = False) -> None:
+        """Handelt Sitzung, Ton-Stream und Videostrom aus und öffnet den Datenkanal.
+
+        Mit *audio* geht danach der Ton über :meth:`send_audio` mit, sofern der
+        Empfänger ALAC nimmt und Ports für den Ton nennt; sonst bleibt der
+        Ton-Stream ein Platzhalter.
+        """
         if self.rtsp is None or self.rtsp.cipher is None:
             raise MirrorError("Nicht angemeldet")
         self.width, self.height = width, height
@@ -521,10 +546,13 @@ class MirrorSession:
                     "RTP-Info": "seq=0;rtptime=0"}, timeout=10)
             except StatusError as exc:
                 raise self._explain(exc) from exc
-        # Ton-Ports werden nicht gebraucht (keine Tonpakete) – nur die Zeit bleibt
-        for sock in self._udp[1:]:
-            sock.close()
-        del self._udp[1:]
+        if audio:
+            self._start_audio()
+        if self.audio is None:
+            # Ohne Ton werden die Ton-Ports nicht gebraucht – nur die Zeit bleibt
+            for sock in self._udp[1:]:
+                sock.close()
+            del self._udp[1:]
         for target, name in ((self._data_monitor, "airplay-data"),
                              (self._feedback_loop, "airplay-feedback"),
                              (self._heartbeat_loop, "airplay-heartbeat")):
@@ -598,7 +626,7 @@ class MirrorSession:
     def _setup_audio(self) -> None:
         """Ton-Stream als Platzhalter; bei abgelehnter Form einmal die andere."""
         modern = bool(_features(self.info) >> FEATURE_STREAM_CONNECTIONS & 1)
-        key = os.urandom(32)
+        key = self._audio_key = os.urandom(32)
         try:
             response, headers, at = self._setup(self._audio_uri, self._audio_request(modern, key))
         except StatusError as exc:
@@ -613,10 +641,40 @@ class MirrorSession:
                     raise PtpUnavailable(str(exc2)) from exc2
                 raise self._explain(exc2) from exc2
         self._after_response(response)
+        self._audio_ports = audio_ports(response)
         if not self._session_first:
             self._record_pending = not response.get("skipRecord", False)
             self._configure_clock(response, headers, at)
             self._refresh_info()
+
+    def _start_audio(self) -> None:
+        data_port, control_port = self._audio_ports
+        features = _features(self.info)
+        if not data_port or not control_port:
+            self.log("[airplay] Der Fernseher nennt keine Ton-Ports – Spiegelung ohne Ton")
+            return
+        if not receiver_takes_alac(self.info, features):
+            self.log("[airplay] Der Fernseher nimmt kein ALAC – Spiegelung ohne Ton")
+            return
+        self.audio = AudioSender(
+            self._udp[2], self._udp[1], (self._peer, data_port), (self._peer, control_port),
+            self._audio_key, latency_samples=self.latency_ms * 44100 // 1000,
+            rfc2198=bool(features >> FEATURE_RFC2198 & 1), timing=self.timing,
+            clock=self._audio_clock, now=boot_ns, log=self.log)
+        self.audio.start()
+
+    def _audio_clock(self, local_ns: int) -> tuple[int, int]:
+        """Netzzeit für Sync-Pakete: PTP-Achse, sonst Systemstart-Uhr mit NTP-Epoche."""
+        mapped = self.clock.at(local_ns) if self.clock is not None else None
+        if mapped:
+            return mapped
+        return compact(local_ns) + (NTP_EPOCH_OFFSET << 32), 0
+
+    def send_audio(self, pcm: bytes, local_ns: int | None = None) -> None:
+        """S16LE, 44,1 kHz, Stereo. Vor dem ersten Bild wird verworfen, damit der
+        Ton nicht vor dem Bild anläuft."""
+        if self.audio is not None and self._first_frame.is_set() and not self._closing.is_set():
+            self.audio.push(pcm, local_ns)
 
     def _setup_video(self) -> int:
         """Videostrom anmelden; liefert den TCP-Port für die Bilder."""
@@ -869,6 +927,8 @@ class MirrorSession:
         if self._closing.is_set():
             return
         self._closing.set()
+        if self.audio is not None:
+            self.audio.close()
         if self.rtsp is not None and self.session_uri:
             with contextlib.suppress(Exception):
                 self.rtsp.request("TEARDOWN", self.session_uri, timeout=3, allow_error=True)

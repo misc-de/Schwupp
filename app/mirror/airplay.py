@@ -15,8 +15,9 @@ Netzwerk: Bei NTP-Empfängern fragt der Fernseher während des Aufbaus per UDP
 unsere Uhr ab. Dafür gilt ein fester Portbereich (:data:`PORT_RANGE`), damit
 sich eine Firewall-Regel angeben lässt (siehe docs/MIRRORING.md).
 
-Ton überträgt diese Engine noch nicht; der Ton-Stream wird nur als Platzhalter
-angemeldet, wie es die Empfänger erwarten.
+Ton: Der Systemton (Monitor der Standard-Ausgabe) geht als ALAC über RTP mit,
+sofern ``mirror_audio`` an ist und der Empfänger ALAC nimmt
+(:mod:`.airplay_stream.audio`); sonst bleibt der Ton-Stream ein Platzhalter.
 """
 from __future__ import annotations
 
@@ -26,8 +27,13 @@ import threading
 import time
 
 from .airplay_stream import hap
-from .airplay_stream.session import MirrorSession, PtpUnavailable
-from .capture import h264_encoder_desc, retime_portal_source
+from .airplay_stream.session import MirrorSession, PtpUnavailable, boot_ns
+from .capture import (
+    audio_source_desc,
+    default_monitor_device,
+    h264_encoder_desc,
+    retime_portal_source,
+)
 from .engine import MirrorEngine, gst_init
 
 PORT_RANGE = (60000, 60010)
@@ -44,6 +50,7 @@ class AirplayMirrorEngine(MirrorEngine):
         super().__init__(receiver, server, config, on_error, on_started)
         self._session: MirrorSession | None = None
         self._pipeline = None
+        self._audio_pipeline = None
         self._Gst = None
         self._source_desc = ""
         self._size = (0, 0)
@@ -122,7 +129,7 @@ class AirplayMirrorEngine(MirrorEngine):
                 session.close()
                 return
             try:
-                session.setup(width, height)
+                session.setup(width, height, audio=self._want_audio())
             except PtpUnavailable as exc:
                 # Manche Empfänger bieten PTP an und liefern dann keine Uhr –
                 # neue Verbindung mit NTP, wie es echte Sender auch tun.
@@ -131,7 +138,7 @@ class AirplayMirrorEngine(MirrorEngine):
                 session = self._new_session(force_ntp=True)
                 self._session = session
                 session.connect()
-                session.setup(width, height)
+                session.setup(width, height, audio=self._want_audio())
         except Exception:
             session.close()
             raise
@@ -139,6 +146,11 @@ class AirplayMirrorEngine(MirrorEngine):
             session.close()
             return
         self._launch_encoder(fps, bitrate_kbps)
+        if session.audio is not None:
+            self._launch_audio()
+
+    def _want_audio(self) -> bool:
+        return bool(self.cfg("mirror_audio")) and audio_source_desc() is not None
 
     def _on_session_failure(self, message: str) -> None:
         if self._running:
@@ -166,6 +178,53 @@ class AirplayMirrorEngine(MirrorEngine):
         bus.add_signal_watch()
         bus.connect("message::error", self._on_bus_error)
         self._pipeline.set_state(Gst.State.PLAYING)
+
+    def _launch_audio(self) -> None:
+        """Systemton (Monitor der Standard- bzw. TV-Ausgabe) als 16-Bit-PCM.
+
+        Eine eigene Pipeline: Fällt die Tonquelle aus, stirbt nur sie – das Bild
+        läuft weiter.
+        """
+        Gst = self._Gst
+        src = audio_source_desc()
+        device = default_monitor_device()
+        if device and src.startswith("pulsesrc"):
+            src = src.replace("pulsesrc ", f'pulsesrc device="{device}" ', 1)
+        desc = (f"{src} ! audio/x-raw,format=S16LE,rate=44100,channels=2,layout=interleaved "
+                f"! appsink name=asink emit-signals=true sync=false max-buffers=16 drop=false")
+        try:
+            self._audio_pipeline = Gst.parse_launch(desc)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[airplay] Systemton nicht verfügbar ({exc}) – Spiegelung bleibt stumm")
+            return
+        self._audio_pipeline.get_by_name("asink").connect("new-sample", self._on_audio_sample)
+        bus = self._audio_pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_audio_error)
+        self._audio_pipeline.set_state(Gst.State.PLAYING)
+
+    def _on_audio_error(self, _bus, message) -> None:  # noqa: ANN001
+        err, _dbg = message.parse_error()
+        print(f"[airplay] Systemton-Pipeline gestoppt: {err} – Bild läuft weiter")
+
+    def _on_audio_sample(self, sink):  # noqa: ANN001
+        Gst = self._Gst
+        sample = sink.emit("pull-sample")
+        session = self._session
+        if sample is None or not self._running or session is None:
+            return Gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        ok, info = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            data = bytes(info.data)
+        finally:
+            buf.unmap(info)
+        # Zeit des ersten Werts: jetzt minus Länge des Puffers
+        duration = len(data) // 4 * 1_000_000_000 // 44100
+        session.send_audio(data, boot_ns() - duration)
+        return Gst.FlowReturn.OK
 
     def _on_bus_error(self, _bus, message) -> None:  # noqa: ANN001
         err, _dbg = message.parse_error()
@@ -236,10 +295,12 @@ class AirplayMirrorEngine(MirrorEngine):
     # -- Stop -----------------------------------------------------------------
     def stop(self) -> None:
         self._running = False
-        pipeline, self._pipeline = self._pipeline, None
-        if pipeline is not None:
-            with contextlib.suppress(Exception):
-                pipeline.set_state(self._Gst.State.NULL)
+        for attr in ("_pipeline", "_audio_pipeline"):
+            pipeline = getattr(self, attr)
+            setattr(self, attr, None)
+            if pipeline is not None:
+                with contextlib.suppress(Exception):
+                    pipeline.set_state(self._Gst.State.NULL)
         session, self._session = self._session, None
         if session is not None:
             session.close()

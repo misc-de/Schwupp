@@ -1,8 +1,8 @@
 """AirPlay-Spiegelung über das Hilfsprogramm ``doubletake`` (Rückfall).
 
 Schwupp spricht das Protokoll inzwischen selbst (:mod:`.airplay`); dieser Weg
-bleibt für Desktops, auf denen doubletake installiert ist und Ton mitlaufen
-soll, den die eigene Engine noch nicht überträgt.
+bleibt für Geräte, die FairPlay verlangen (Apple TV, Mac) – das kann die eigene
+Engine nicht –, wo doubletake installiert ist.
 
 Warum ein Hilfsprogramm statt des eigenen Capture-Stacks? AirPlay-Spiegelung
 ist ein eigenes Protokoll (RTSP + verschlüsselter Videostrom, SRP-6a-Pairing,

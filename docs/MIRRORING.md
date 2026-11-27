@@ -244,8 +244,8 @@ neben der Einwilligung über die Schnelleinstellung. Schwupp spricht das
 Protokoll deshalb selbst (`app/mirror/airplay_stream/`, Engine
 `app/mirror/airplay.py`) und nimmt Bild und Encoder aus derselben Kette wie
 beim Cast-Spiegeln, auf dem Telefon also den Hardware-Encoder. doubletake
-bleibt als Weg „AirPlay (doubletake)“ wählbar, wo es installiert ist – es
-überträgt auch den Ton, den die eigene Engine noch nicht sendet.
+bleibt als Weg „AirPlay (doubletake)“ wählbar, wo es installiert ist – für
+Geräte, die FairPlay verlangen.
 
 ### Ablauf
 
@@ -262,9 +262,9 @@ bleibt als Weg „AirPlay (doubletake)“ wählbar, wo es installiert ist – es
    `Control-Salt`/`Control-Write-…`/`Control-Read-…`).
 4. `SETUP` der Sitzung zuerst; antwortet der Empfänger mit 455 (oder 400/405/
    406/415/501), kommt die ältere Reihenfolge, in der der Ton-Stream die
-   Sitzung anlegt. Der Ton-Stream (Typ 96, ALAC) ist nur ein Platzhalter, es
-   folgen keine Pakete – Empfänger erwarten ihn trotzdem und verlangen über
-   den verschlüsselten Kanal einen eigenen 32-Byte-Schlüssel (`shk`).
+   Sitzung anlegt. Der Ton-Stream (Typ 96, ALAC) verlangt über den
+   verschlüsselten Kanal einen eigenen 32-Byte-Schlüssel (`shk`); ohne Ton
+   bleibt er ein Platzhalter ohne Pakete, den die Empfänger trotzdem erwarten.
 5. Video-`SETUP` (Typ 110) → `dataPort`, TCP dorthin, `RECORD`.
 6. Je Bild ein 128-Byte-Kopf (Länge, Typ, Schlüsselbild-Flag, Zeitstempel,
    Zeitachse) und die H.264-Daten als AVCC, mit ChaCha20-Poly1305
@@ -275,6 +275,27 @@ bleibt als Weg „AirPlay (doubletake)“ wählbar, wo es installiert ist – es
    unverschlüsselt voraus (Typ 1), bei jeder Änderung erneut.
 7. Am Leben halten: `POST /feedback` alle 2 s, Heartbeat (Typ 2) jede Sekunde
    auf dem Datenkanal, Antworten auf die Zeitanfragen des Empfängers.
+
+### Ton
+
+- Der Monitor der Standard-Ausgabe (bzw. der TV-Ausgabe des Desktops) als
+  S16LE, 44,1 kHz, Stereo; je 352 Abtastwerte ein ALAC-Rahmen im
+  unkomprimierten Modus (verbatim, 1416 Byte) – kein Encoder nötig,
+  ≈ 1,4 Mbit/s.
+- RTP über UDP an den Datenport aus der Ton-Antwort (Typ 0x60, SSRC 0,
+  Sequenz ab 1, RTP-Zeit ab 352). Verschlüsselt mit ChaCha20-Poly1305 und dem
+  `shk`: Nonce ein Zähler (8 Byte, ans Paket angehängt), AAD die 8 Byte
+  Zeitstempel+SSRC aus dem Kopf.
+- Empfänger mit Feature-Bit 61 bekommen RFC 2198 (Typ 0x61). Ein
+  unkomprimierter Rahmen ist dafür zu groß (10-Bit-Längenfeld, Datagramm
+  ≤ 1472 Byte), das Paket trägt dann nur den aktuellen Rahmen.
+- Sync-Pakete an den Steuerport (NTP 0xd4, PTP 0xd7), beim ersten mit
+  gesetztem Erweiterungsbit, danach jede Sekunde: „RTP-Zeit − Puffer spielt
+  zur Netzzeit T“ – NTP mit Epoche, PTP in Nanosekunden samt Zeitachse.
+- Nachforderungen (0xd5) beantwortet der Sender mit dem Originalpaket hinter
+  einem 4-Byte-Kopf (0xd6), aus den letzten 512 Paketen; ein abgelaufenes
+  bekommt die 8-Byte-Absage.
+- Gesendet wird erst ab dem ersten Bild, damit der Ton nicht vorausläuft.
 
 ### Uhr
 
@@ -292,7 +313,8 @@ bleibt als Weg „AirPlay (doubletake)“ wählbar, wo es installiert ist – es
 
 Schlüsselableitung, verschlüsseltes Bild, avcC, Kanalschlüssel und
 Zeitstempel sind byte-genau gegen doubletake abgeglichen (Testvektoren in
-`tests/test_airplay_stream.py`). Ganze Sitzungen laufen in den Tests gegen
+`tests/test_airplay_stream.py`), ebenso ALAC-Rahmen, Ton-Pakete samt RFC 2198
+und Sync-Pakete (`tests/test_airplay_audio.py`). Ganze Sitzungen laufen in den Tests gegen
 einen Empfänger in Python, der jedes Bild entschlüsselt, und wurden gegen
 doubletakes eigenen Test-Empfänger (Profil eines LG-Fernsehers: HKP 3, PTP
 ohne Anker → NTP) geprüft, ebenso die Weiternutzung einer pyatv-Kopplung.

@@ -102,19 +102,26 @@ class _FakeSession:
         self.closed = False
         self.sent: list[bytes] = []
         self.restarted = 0
+        self.audio = None
+        self.want_audio = None
+        self.pcm: list[bytes] = []
         _FakeSession.instances.append(self)
 
     def connect(self):
         pass
 
-    def setup(self, width, height):
+    def setup(self, width, height, audio=False):
         self.size = (width, height)
+        self.want_audio = audio
         if _FakeSession.fail_setup:
             raise _FakeSession.fail_setup.pop(0)
 
     def send_access_unit(self, data):
         self.sent.append(data)
         return True
+
+    def send_audio(self, pcm, local_ns=None):
+        self.pcm.append((pcm, local_ns))
 
     def restart_video(self):
         self.restarted += 1
@@ -355,8 +362,8 @@ def test_a_stop_right_after_setup_closes_the_session(fake_session, monkeypatch):
     engine, _ = _engine()
     original = fake_session.setup
 
-    def setup(self, width, height):
-        original(self, width, height)
+    def setup(self, width, height, audio=False):
+        original(self, width, height, audio)
         engine._running = False
 
     monkeypatch.setattr(fake_session, "setup", setup)
@@ -393,3 +400,71 @@ def test_a_failing_restart_ends_the_mirroring(fake_session, monkeypatch):
     engine._capture = type("Cap", (), {"restart_sync": broken, "stop": lambda self: None})()
     engine._recover()
     assert "Portal weg" in errors[0] and not engine._recovering
+
+
+def test_sound_is_asked_for_when_wanted_and_a_source_exists(fake_session, monkeypatch):
+    engine, _ = _engine(mirror_audio=True)
+    monkeypatch.setattr(airplay, "audio_source_desc", lambda: "pulsesrc x")
+    monkeypatch.setattr(engine, "_launch_encoder", lambda *a: None)
+    started = []
+    monkeypatch.setattr(engine, "_launch_audio", lambda: started.append(1))
+    original = fake_session.setup
+
+    def setup(self, width, height, audio=False):
+        original(self, width, height, audio)
+        self.audio = object()                       # Empfänger nimmt Ton
+
+    monkeypatch.setattr(fake_session, "setup", setup)
+    engine.run("src")
+    assert fake_session.instances[0].want_audio is True and started == [1]
+    engine, _ = _engine(mirror_audio=False)
+    assert not engine._want_audio()
+    monkeypatch.setattr(airplay, "audio_source_desc", lambda: None)
+    engine, _ = _engine(mirror_audio=True)
+    assert not engine._want_audio()
+
+
+def test_the_sound_pipeline_reads_the_monitor_as_16_bit_pcm(monkeypatch):
+    engine, _ = _engine()
+    gst = _with_gst(engine, monkeypatch)
+    engine._Gst = gst
+    monkeypatch.setattr(airplay, "audio_source_desc", lambda: "pulsesrc do-timestamp=true")
+    monkeypatch.setattr(airplay, "default_monitor_device", lambda: "plinius_tv.monitor")
+    engine._launch_audio()
+    desc = gst.pipelines[0].desc
+    assert desc.startswith('pulsesrc device="plinius_tv.monitor" do-timestamp=true')
+    assert "format=S16LE,rate=44100,channels=2" in desc and "appsink name=asink" in desc
+    assert engine._audio_pipeline.state == "playing"
+
+    def broken(desc):
+        raise RuntimeError("kein pulsesrc")
+
+    gst.parse_launch = broken
+    engine._audio_pipeline = None
+    engine._launch_audio()                                  # bleibt stumm, kein Abbruch
+    assert engine._audio_pipeline is None
+
+
+def test_sound_samples_go_to_the_session_with_their_start_time(fake_session, monkeypatch):
+    engine, errors = _engine()
+    engine._Gst = _Gst()
+    engine._session = session = fake_session("192.0.2.40")
+    monkeypatch.setattr(airplay, "boot_ns", lambda: 2_000_000_000)
+    pcm = b"\x01\x00\x02\x00" * 441                            # 10 ms
+    assert engine._on_audio_sample(_Sink(_Sample(pcm))) == "ok"
+    assert session.pcm == [(pcm, 2_000_000_000 - 10_000_000)]
+    sample = _Sample(b"x")
+    sample.buffer.map = lambda flags: (False, None)
+    engine._on_audio_sample(_Sink(sample))
+    engine._on_audio_sample(_Sink(None))
+    assert len(session.pcm) == 1
+    engine._on_audio_error(None, type("M", (), {"parse_error": lambda self: ("weg", "")})())
+    assert errors == []                                      # Ton-Fehler beendet nichts
+
+
+def test_stop_also_ends_the_sound_pipeline(fake_session):
+    engine, _ = _engine()
+    engine._Gst = _Gst()
+    engine._audio_pipeline = sound = _Pipeline("ton")
+    engine.stop()
+    assert sound.state == "null" and engine._audio_pipeline is None
