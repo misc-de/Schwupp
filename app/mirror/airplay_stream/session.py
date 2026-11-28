@@ -68,8 +68,9 @@ _AUDIO_SPF = 352
 _AUDIO_FORMAT_ALAC = 0x40000
 
 _FEEDBACK_INTERVAL = 2.0
-_OPEN_ATTEMPTS = 2
-_OPEN_RETRY_DELAY = 1.5
+# Pausen vor den weiteren Versuchen (s): Der Hisense nahm nach dem Schließen der
+# Wiedergabe-Sitzung eine Weile keine Verbindung an (Errno 111/104).
+_OPEN_RETRY_DELAYS = (1.0, 1.5, 2.0, 2.5, 3.0)
 _HEARTBEAT_INTERVAL = 1.0
 _PTP_ASYNC_WAIT = 2.0
 
@@ -356,6 +357,7 @@ class MirrorSession:
         self._closing = threading.Event()
         self._failed = False
         self.frames_sent = 0
+        self.ntp_requests = 0
         self.audio: AudioSender | None = None
         self._audio_key = b""
         self._audio_ports = (0, 0)
@@ -364,11 +366,12 @@ class MirrorSession:
     def _open(self) -> None:
         """Neue Steuerverbindung und ``GET /info``.
 
-        Setzt der Fernseher die Verbindung gleich zurück – etwa weil er die
-        Sitzung eines anderen Senders gerade erst schließt –, gibt es nach
-        einer kurzen Pause einen zweiten Versuch.
+        Setzt der Fernseher die Verbindung zurück oder lehnt sie ab – etwa weil
+        er eine andere Sitzung gerade erst schließt –, folgen weitere Versuche
+        mit wachsenden Pausen (zusammen etwa 10 s).
         """
-        for attempt in range(_OPEN_ATTEMPTS):
+        attempts = len(_OPEN_RETRY_DELAYS) + 1
+        for attempt in range(attempts):
             if self.rtsp is not None:
                 self.rtsp.close()
             try:
@@ -377,10 +380,10 @@ class MirrorSession:
                 break
             except (OSError, RtspError) as exc:
                 self.log(f"[airplay] GET /info, Versuch {attempt + 1}: {exc}")
-                if attempt + 1 == _OPEN_ATTEMPTS:
+                if attempt + 1 == attempts:
                     raise MirrorError("Der Fernseher nimmt keine Verbindung an – läuft "
                                       f"gerade eine andere AirPlay-Sitzung? ({exc})") from exc
-                time.sleep(_OPEN_RETRY_DELAY)
+                time.sleep(_OPEN_RETRY_DELAYS[attempt])
         self.server = response.headers.get("server", "")
         self.info = response.plist()
         self.log(f"[airplay] {self.info.get('model', '?')} ({self.server or '?'}): "
@@ -529,10 +532,19 @@ class MirrorSession:
         return request
 
     def _setup(self, uri: str, payload: dict) -> tuple[dict, dict[str, str], int]:
-        response = self.rtsp.request_plist("SETUP", uri, payload, timeout=15)
+        streams = payload.get("streams") or [{}]
+        what = {96: "Ton", 110: "Video"}.get(streams[0].get("type"), "Sitzung")
+        try:
+            response = self.rtsp.request_plist("SETUP", uri, payload, timeout=15)
+        except (StatusError, RtspError) as exc:
+            self.log(f"[airplay] SETUP {what}: {exc}")
+            raise
         if not self.session_uri:
             self.session_uri = uri
-        return response.plist(), response.headers, boot_ns()
+        body = response.plist()
+        self.log(f"[airplay] SETUP {what}: {response.status}, "
+                 f"Felder {sorted(body)}")
+        return body, response.headers, boot_ns()
 
     def setup(self, width: int, height: int, audio: bool = False) -> None:
         """Handelt Sitzung, Ton-Stream und Videostrom aus und öffnet den Datenkanal.
@@ -759,6 +771,9 @@ class MirrorSession:
                 continue
             reply = ntp_reply(data)
             if reply is not None:
+                self.ntp_requests += 1
+                if self.ntp_requests <= 3:
+                    self.log(f"[airplay] Zeitanfrage {self.ntp_requests} von {addr[0]}")
                 with contextlib.suppress(OSError):
                     sock.sendto(reply, addr)
 

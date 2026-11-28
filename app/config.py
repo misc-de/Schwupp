@@ -45,6 +45,8 @@ _DEFAULTS: dict[str, Any] = {
     # Kopplungen fürs Spiegeln je Host, wo der Empfänger dafür eine eigene will
     # (Apple-Geräte: Typ 5 mit Freigabe für die Bildschirmaufnahme)
     "airplay_mirror_creds": {},
+    # AirPlay-Hosts, die PTP anbieten, aber keine Uhr liefern: dort gleich NTP
+    "airplay_ntp_only": [],
     # Gerätespezifische Overrides der DEVICE_KEYS je Geräte-UUID:
     #   {"cast:…": {"mirror_engine": "hls", "mirror_bitrate_kbps": 4000}}
     "device_overrides": {},

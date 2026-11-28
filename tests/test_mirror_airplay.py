@@ -44,7 +44,7 @@ class _Receiver:
 def _engine(**config):
     base = {"mirror_fps": 30, "mirror_bitrate_kbps": 6000, "mirror_height": 1080,
             "mirror_target_delay_ms": 150, "mirror_encoder": "auto",
-            "airplay_creds": {}, "airplay_mirror_creds": {}}
+            "airplay_creds": {}, "airplay_mirror_creds": {}, "airplay_ntp_only": []}
     base.update(config)
     errors = []
     engine = AirplayMirrorEngine(_Receiver(), None, _Config(base), on_error=errors.append)
@@ -170,6 +170,11 @@ def test_a_receiver_without_ptp_clock_gets_a_second_try_with_ntp(fake_session, m
     assert first.closed and not second.closed
     assert second.kwargs["force_ntp"] is True
     assert engine._session is second
+    # gemerkt: beim nächsten Mal gleich NTP, ohne den abgebrochenen PTP-Versuch
+    assert engine.config["airplay_ntp_only"] == ["192.0.2.40"] and engine.config.saved == 1
+    engine._remember_ntp_only()
+    assert engine.config.saved == 1
+    assert engine._new_session().kwargs["force_ntp"] is True
 
 
 def test_failures_close_the_session(fake_session):
@@ -440,7 +445,7 @@ def test_the_sound_pipeline_reads_the_monitor_as_16_bit_pcm(monkeypatch):
     gst = _with_gst(engine, monkeypatch)
     engine._Gst = gst
     monkeypatch.setattr(airplay, "audio_source_desc", lambda: "pulsesrc do-timestamp=true")
-    monkeypatch.setattr(airplay, "default_monitor_device", lambda: "plinius_tv.monitor")
+    monkeypatch.setattr(engine, "_sound_device", lambda: "plinius_tv.monitor")
     engine._launch_audio()
     desc = gst.pipelines[0].desc
     assert desc.startswith('pulsesrc device="plinius_tv.monitor" do-timestamp=true')
@@ -479,3 +484,84 @@ def test_stop_also_ends_the_sound_pipeline(fake_session):
     engine._audio_pipeline = sound = _Pipeline("ton")
     engine.stop()
     assert sound.state == "null" and engine._audio_pipeline is None
+
+
+class _FakePipewire:
+    """Statt pactl: merkt sich, was am Ton umgestellt würde."""
+
+    NULL_SINK = "schwupp_sound"
+
+    def __init__(self, sinks, fail=False):
+        self._sinks = sinks
+        self.fail = fail
+        self.calls = []
+        self.started = []
+        self.stopped = []
+        outer = self
+
+        class NullSink:
+            def __init__(self, description):
+                self.description = description
+                self.monitor = "schwupp_sound.monitor"
+
+            def start(self):
+                if outer.fail:
+                    raise RuntimeError("pactl fehlt")
+                outer.started.append(self.description)
+
+            def stop(self):
+                outer.stopped.append(self.description)
+
+        self.NullSink = NullSink
+
+    def sinks(self):
+        return self._sinks
+
+    def pactl(self, *args):
+        self.calls.append(args)
+        if args[:3] == ("list", "short", "sink-inputs"):
+            return "41\tx\ty\n42\tx\ty"
+        if args[0] == "move-sink-input" and args[1] == "42":
+            raise RuntimeError("Strom schon weg")
+        return ""
+
+
+@pytest.fixture
+def fake_pipewire(monkeypatch):
+    from app.speaker import pipewire
+
+    def install(sinks, fail=False):
+        fake = _FakePipewire(sinks, fail)
+        for name in ("sinks", "pactl", "NullSink"):
+            monkeypatch.setattr(pipewire, name, getattr(fake, name))
+        return fake
+
+    return install
+
+
+def test_mirrored_sound_plays_only_on_the_tv(fake_pipewire, monkeypatch):
+    engine, _ = _engine()
+    engine.receiver.info = type("Info", (), {"name": "Wohnzimmer-TV"})()
+    fake = fake_pipewire(["hal_output"])
+    assert engine._sound_device() == "schwupp_sound.monitor"
+    assert fake.started == ["Wohnzimmer-TV"]
+    moves = [c for c in fake.calls if c[0] == "move-sink-input"]
+    assert moves == [("move-sink-input", "41", "schwupp_sound"),
+                     ("move-sink-input", "42", "schwupp_sound")]
+    engine._Gst = _Gst()
+    engine.stop()
+    assert fake.stopped == ["Wohnzimmer-TV"] and engine._sound_sink is None
+
+
+def test_the_desktop_tv_sink_is_used_as_it_is(fake_pipewire, monkeypatch):
+    engine, _ = _engine()
+    fake = fake_pipewire(["hal_output", "plinius_tv"])
+    monkeypatch.setattr(airplay, "default_monitor_device", lambda: "plinius_tv.monitor")
+    assert engine._sound_device() == "plinius_tv.monitor" and fake.started == []
+
+
+def test_without_pactl_the_default_monitor_is_used(fake_pipewire, monkeypatch):
+    engine, _ = _engine()
+    fake_pipewire(["hal_output"], fail=True)
+    monkeypatch.setattr(airplay, "default_monitor_device", lambda: "hal_output.monitor")
+    assert engine._sound_device() == "hal_output.monitor" and engine._sound_sink is None

@@ -29,6 +29,7 @@ import time
 from .airplay_stream import hap
 from .airplay_stream.session import MirrorSession, PtpUnavailable, boot_ns
 from .capture import (
+    TV_SINK,
     audio_source_desc,
     default_monitor_device,
     h264_encoder_desc,
@@ -52,6 +53,7 @@ class AirplayMirrorEngine(MirrorEngine):
         self._session: MirrorSession | None = None
         self._pipeline = None
         self._audio_pipeline = None
+        self._sound_sink = None
         self._Gst = None
         self._source_desc = ""
         self._size = (0, 0)
@@ -105,6 +107,20 @@ class AirplayMirrorEngine(MirrorEngine):
         threading.Thread(target=self._watchdog_loop, daemon=True,
                          name="mirror-airplay-watchdog").start()
 
+    def _ntp_only(self) -> bool:
+        """Hat dieser Fernseher PTP schon einmal angeboten und keine Uhr geliefert?"""
+        return self._host() in (self.config["airplay_ntp_only"] or [])
+
+    def _remember_ntp_only(self) -> None:
+        # Der Hisense startet nach dem abgebrochenen PTP-Versuch seinen AirPlay-
+        # Dienst neu und nimmt rund 7 s keine Verbindung an – beim nächsten Mal
+        # gleich NTP nehmen.
+        hosts = list(self.config["airplay_ntp_only"] or [])
+        if self._host() not in hosts:
+            self.config["airplay_ntp_only"] = [*hosts, self._host()]
+            with contextlib.suppress(Exception):
+                self.config.save()
+
     def _new_session(self, force_ntp: bool = False) -> MirrorSession:
         return MirrorSession(
             self._host(),
@@ -114,7 +130,7 @@ class AirplayMirrorEngine(MirrorEngine):
             name=socket.gethostname() or "Schwupp",
             port_range=PORT_RANGE,
             latency_ms=self.cfg_int("mirror_target_delay_ms", 150),
-            force_ntp=force_ntp,
+            force_ntp=force_ntp or self._ntp_only(),
             on_failure=self._on_session_failure,
         )
 
@@ -141,6 +157,7 @@ class AirplayMirrorEngine(MirrorEngine):
                 # Manche Empfänger bieten PTP an und liefern dann keine Uhr –
                 # neue Verbindung mit NTP, wie es echte Sender auch tun.
                 print(f"[airplay] {exc} – neuer Versuch mit NTP")
+                self._remember_ntp_only()
                 session.close()
                 session = self._new_session(force_ntp=True)
                 self._session = session
@@ -158,6 +175,12 @@ class AirplayMirrorEngine(MirrorEngine):
 
     def _want_audio(self) -> bool:
         return bool(self.cfg("mirror_audio")) and audio_source_desc() is not None
+
+    def fail(self, message) -> None:  # noqa: ANN001
+        # Was in der Oberfläche steht, auch im Journal – sonst fehlt beim Nachsehen
+        # genau der letzte Schritt.
+        print(f"[airplay] Abbruch: {message}")
+        super().fail(message)
 
     def _on_session_failure(self, message: str) -> None:
         if self._running:
@@ -194,7 +217,7 @@ class AirplayMirrorEngine(MirrorEngine):
         """
         Gst = self._Gst
         src = audio_source_desc()
-        device = default_monitor_device()
+        device = self._sound_device()
         if device and src.startswith("pulsesrc"):
             src = src.replace("pulsesrc ", f'pulsesrc device="{device}" ', 1)
         desc = (f"{src} ! audio/x-raw,format=S16LE,rate=44100,channels=2,layout=interleaved "
@@ -209,6 +232,30 @@ class AirplayMirrorEngine(MirrorEngine):
         bus.add_signal_watch()
         bus.connect("message::error", self._on_audio_error)
         self._audio_pipeline.set_state(Gst.State.PLAYING)
+
+    def _sound_device(self) -> str | None:
+        """Monitor, dessen Ton zum Fernseher geht – und nur dorthin.
+
+        Läuft der Desktop auf dem Fernseher, hat er seine eigene TV-Ausgabe; sonst
+        wird für die Dauer der Spiegelung eine virtuelle Ausgabe zur Standard-
+        Ausgabe (wie beim Ton an Lautsprecher), damit das Telefon still bleibt.
+        """
+        from ..speaker import pipewire
+
+        with contextlib.suppress(RuntimeError, OSError):
+            if TV_SINK not in pipewire.sinks():
+                name = getattr(getattr(self.receiver, "info", None), "name", "") or "AirPlay"
+                sink = pipewire.NullSink(name)
+                sink.start()
+                self._sound_sink = sink
+                # Schon laufende Ströme folgen der neuen Standard-Ausgabe nicht von
+                # selbst (am Telefon führt WirePlumber sie über Rollen) – umhängen.
+                for line in pipewire.pactl("list", "short", "sink-inputs").splitlines():
+                    with contextlib.suppress(RuntimeError):
+                        pipewire.pactl("move-sink-input", line.split("\t")[0],
+                                       pipewire.NULL_SINK)
+                return sink.monitor
+        return default_monitor_device()
 
     def _on_audio_error(self, _bus, message) -> None:  # noqa: ANN001
         err, _dbg = message.parse_error()
@@ -311,4 +358,8 @@ class AirplayMirrorEngine(MirrorEngine):
         session, self._session = self._session, None
         if session is not None:
             session.close()
+        sink, self._sound_sink = self._sound_sink, None
+        if sink is not None:
+            with contextlib.suppress(Exception):
+                sink.stop()
         self._stop_capture()

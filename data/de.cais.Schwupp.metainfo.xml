@@ -95,6 +95,12 @@
   </branding>
 
   <releases>
+    <release version="0.7.3" date="2026-11-28">
+      <description>
+        <p>Mirroring to AirPlay TVs that restart their AirPlay service: more attempts with growing pauses, and a TV that offers PTP without a clock gets NTP straight away next time. While mirroring, the sound plays only on the TV.</p>
+        <p xml:lang="de">Spiegeln auf AirPlay-Fernseher, die ihren AirPlay-Dienst neu starten: mehr Versuche mit wachsenden Pausen, und ein Fernseher, der PTP ohne Uhr anbietet, bekommt beim nächsten Mal gleich NTP. Beim Spiegeln läuft der Ton nur noch am Fernseher.</p>
+      </description>
+    </release>
     <release version="0.7.2" date="2026-11-28">
       <description>
         <p>Mirroring to AirPlay TVs that take only one connection per device: the playback session is released first, and a connection the TV resets is tried once more.</p>

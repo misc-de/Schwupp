@@ -235,7 +235,7 @@ P_FRAME = AUD + b"\x00\x00\x01\x41\x9a\x02\x03"
 
 @pytest.fixture(autouse=True)
 def fast_intervals(monkeypatch):
-    monkeypatch.setattr(session, "_OPEN_RETRY_DELAY", 0.01)
+    monkeypatch.setattr(session, "_OPEN_RETRY_DELAYS", (0.01, 0.01))
     monkeypatch.setattr(session, "_HEARTBEAT_INTERVAL", 0.05)
     monkeypatch.setattr(session, "_FEEDBACK_INTERVAL", 0.05)
 
@@ -467,8 +467,8 @@ def test_a_reset_first_connection_gets_a_second_try():
     assert any("features" in line for line in logs)
 
 
-def test_two_resets_explain_the_likely_cause():
-    rx = FakeReceiver(reset_first=2)
+def test_repeated_resets_explain_the_likely_cause():
+    rx = FakeReceiver(reset_first=3)               # mehr Rücksetzer als Versuche
     try:
         with pytest.raises(MirrorError, match="andere AirPlay-Sitzung"):
             _session(rx).connect()
